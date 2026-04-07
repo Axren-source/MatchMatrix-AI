@@ -217,7 +217,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Team A vs Team B\n\n"
             "Example:\nReal Madrid vs Bayern"
         )
-
+    
     elif " vs " in query.data:
         match_text = query.data
         fake_update = update
@@ -359,12 +359,11 @@ def generate_explanation(home_stats, away_stats):
 
     return ", ".join(reasons).capitalize() + "."
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input = update.message.text.strip()
+async def process_match_request(message_obj, context, user_input: str):
     home_name, away_name = parse_match(user_input)
 
     if not home_name or not away_name:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "Invalid format.\n\nUse something like:\nReal Madrid vs Bayern",
             reply_markup=main_menu_keyboard()
         )
@@ -376,7 +375,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if not home_team or not away_team:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             "Team not found.\n\nTry exact names like:\n"
             "• Real Madrid CF\n"
             "• FC Bayern München\n"
@@ -396,14 +395,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     away_stats = collect_team_dataset(away_team["id"], recent_limit=10)
 
     if home_stats is None:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             f"Not enough recent data for {home_team['name']}.",
             reply_markup=main_menu_keyboard()
         )
         return
 
     if away_stats is None:
-        await update.message.reply_text(
+        await message_obj.reply_text(
             f"Not enough recent data for {away_team['name']}.",
             reply_markup=main_menu_keyboard()
         )
@@ -468,18 +467,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"Likely winner from score: {verdict}")
     lines.append("")
     lines.append(f"🧠 Insight: {explanation}")
+
     confidence_emoji = {
-      "High": "🟢",
-      "Medium": "🟡",
-      "Low": "🔴"
+        "High": "🟢",
+        "Medium": "🟡",
+        "Low": "🔴"
     }.get(confidence, "")
 
     lines.append(f"🔎 Confidence: {confidence_emoji} {confidence}")
 
-    await update.message.reply_text(
+    await message_obj.reply_text(
         "\n".join(lines),
         reply_markup=main_menu_keyboard()
     )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await process_match_request(update.message, context, update.message.text.strip())
 
 
 def main():
