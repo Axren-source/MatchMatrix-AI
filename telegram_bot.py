@@ -23,7 +23,7 @@ from football_api import (
 from config import CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS, COMPETITIONS
 
 import os
-BOT_TOKEN = os.getenv("8650892245:AAEihvVkqANXBAlbEsH8dWxQ9eNOmJiG4qM")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 MODEL_FILE = "rf_model.pkl"
 
 
@@ -149,7 +149,7 @@ async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     matches = get_scheduled_matches_by_date(
         today,
         today,
-        CLUB_COMPETITIONS
+        CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS
     )
 
     if not matches:
@@ -173,7 +173,7 @@ async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     matches = get_scheduled_matches_by_date(
         tomorrow,
         tomorrow,
-        CLUB_COMPETITIONS
+        CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS
     )
 
     if not matches:
@@ -372,7 +372,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = context.user_data.get("mode")
     home_team, away_team, is_international, competition_codes = detect_match_mode(
-    home_name, away_name, mode
+        home_name, away_name, mode
     )
 
     if not home_team or not away_team:
@@ -465,7 +465,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"Other likely scores: {', '.join(alt_scores)}")
     lines.append(f"xG estimate: {home_team['name']} {xg_home:.2f} - {xg_away:.2f} {away_team['name']}")
     lines.append("")
-    lines.append(f"Most likely score: {main_score}")
     lines.append(f"Likely winner from score: {verdict}")
     lines.append("")
     lines.append(f"🧠 Insight: {explanation}")

@@ -1,7 +1,8 @@
-API_KEY = "d059fd3f67454ac8baecbd4fd32c3bc2"
+import os
+
+API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.football-data.org/v4"
 
-# 🌍 Competitions (clubs + international)
 COMPETITIONS = {
     "WC": "FIFA World Cup",
     "CL": "UEFA Champions League",
