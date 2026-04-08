@@ -1,7 +1,11 @@
 import pickle
 import pandas as pd
 import asyncio
+import json
 
+from pathlib import Path
+from telegram import LabeledPrice
+from telegram.ext import PreCheckoutQueryHandler
 from datetime import datetime, timedelta, UTC
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -26,6 +30,9 @@ from config import FAST_COMPETITIONS, COMPETITIONS, CLUB_COMPETITIONS, INTERNATI
 import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MODEL_FILE = "rf_model.pkl"
+OWNER_ID = 6225991784  # Replace with your Telegram user ID for admin access
+VIP_FILE = Path("vip_users.json")
+VIP_PRICE_STARS = 300
 
 
 def parse_match(text):
@@ -82,12 +89,82 @@ def main_menu_keyboard():
             InlineKeyboardButton("🌍 International Match", callback_data="mode_international"),
         ],
         [
+            InlineKeyboardButton("⭐ Monthly VIP", callback_data="vip_monthly"),
             InlineKeyboardButton("📌 Examples", callback_data="examples"),
+        ],
+        [
             InlineKeyboardButton("❓ Help", callback_data="help"),
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def load_vip_users():
+    if VIP_FILE.exists():
+        with open(VIP_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_vip_users(data):
+    with open(VIP_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+VIP_USERS = load_vip_users()
+
+def is_vip(user_id: int) -> bool:
+    # 🔥 OWNER ALWAYS VIP
+    if user_id == OWNER_ID:
+        return True
+
+    expiry = VIP_USERS.get(str(user_id))
+    if not expiry:
+        return False
+
+    try:
+        expiry_dt = datetime.fromisoformat(expiry)
+        return expiry_dt > datetime.now(UTC)
+    except Exception:
+        return False
+
+def grant_vip(user_id: int, days: int = 30):
+    now = datetime.now(UTC)
+    current = VIP_USERS.get(str(user_id))
+
+    if current:
+        try:
+            current_dt = datetime.fromisoformat(current)
+            if current_dt > now:
+                new_expiry = current_dt + timedelta(days=days)
+            else:
+                new_expiry = now + timedelta(days=days)
+        except Exception:
+            new_expiry = now + timedelta(days=days)
+    else:
+        new_expiry = now + timedelta(days=days)
+
+    VIP_USERS[str(user_id)] = new_expiry.isoformat()
+    save_vip_users(VIP_USERS)
+
+def vip_expiry_text(user_id: int) -> str:
+    expiry = VIP_USERS.get(str(user_id))
+    if not expiry:
+        return "No active VIP."
+
+    try:
+        expiry_dt = datetime.fromisoformat(expiry)
+        return expiry_dt.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return "Unknown"
+
+async def require_vip(message_obj, user_id: int):
+    if is_vip(user_id):
+        return True
+
+    await message_obj.reply_text(
+        "🔒 MatchMatrix AI is premium only.\n\n"
+        "Tap ⭐ Monthly VIP to unlock full access for 30 days.",
+        reply_markup=main_menu_keyboard()
+    )
+    return False
 
 with open(MODEL_FILE, "rb") as f:
     model = pickle.load(f)
@@ -120,6 +197,58 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
+async def send_monthly_vip_invoice(message_obj, context):
+    await context.bot.send_invoice(
+        chat_id=message_obj.chat_id,
+        title="MatchMatrix VIP - 30 Days",
+        description="Unlock full premium access to MatchMatrix AI for 30 days.",
+        payload="vip_monthly_30d",
+        currency="XTR",
+        prices=[LabeledPrice("30-Day VIP Access", VIP_PRICE_STARS)],
+    )
+
+async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.message.successful_payment
+    user_id = update.effective_user.id
+
+    if payment.invoice_payload == "vip_monthly_30d":
+        grant_vip(user_id, days=30)
+        await update.message.reply_text(
+            "✅ VIP activated!\n\n"
+            f"Access valid until: {vip_expiry_text(user_id)}",
+            reply_markup=main_menu_keyboard()
+        )
+
+async def vip_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    # 👑 OWNER BADGE
+    if user_id == OWNER_ID:
+        await update.message.reply_text(
+            "👑 OWNER STATUS\n\n"
+            "Access: Unlimited\n"
+            "Tier: Admin\n"
+            "Expires: Never",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+
+    # normal VIP check
+    if is_vip(user_id):
+        await update.message.reply_text(
+            f"⭐ VIP active until: {vip_expiry_text(user_id)}",
+            reply_markup=main_menu_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            "🔒 No active VIP.\nTap ⭐ Monthly VIP to unlock.",
+            reply_markup=main_menu_keyboard()
+        )
+
 async def get_scheduled_matches_by_date(date_from, date_to, competition_codes):
     all_matches = []
 
@@ -141,8 +270,11 @@ async def get_scheduled_matches_by_date(date_from, date_to, competition_codes):
     return all_matches
 
 async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await require_vip(update.message, user_id):
+        return
     today = datetime.now(UTC).strftime("%Y-%m-%d")
-
+    
     matches = await get_scheduled_matches_by_date(
         today,
         today,
@@ -165,6 +297,9 @@ async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not await require_vip(update.message, user_id):
+        return
     tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%d")
 
     matches = await get_scheduled_matches_by_date(
@@ -215,6 +350,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Example:\nReal Madrid vs Bayern"
         )
     
+    elif query.data == "vip_monthly":
+        await send_monthly_vip_invoice(query.message, context)
+
     elif " vs " in query.data:
         match_text = query.data
         await process_match_request(query.message, context, match_text)
@@ -354,6 +492,9 @@ def generate_explanation(home_stats, away_stats):
     return ", ".join(reasons).capitalize() + "."
 
 async def process_match_request(message_obj, context, user_input: str):
+    user_id = message_obj.from_user.id
+    if not await require_vip(message_obj, user_id):
+        return
     home_name, away_name = parse_match(user_input)
 
     await message_obj.reply_text("⏳ Analyzing match...")
@@ -498,8 +639,11 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("vip", vip_status))
     app.add_handler(CommandHandler("today", today_matches))
     app.add_handler(CommandHandler("tomorrow", tomorrow_matches))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(CallbackQueryHandler(handle_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
