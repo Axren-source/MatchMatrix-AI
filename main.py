@@ -1,7 +1,8 @@
 import pickle
 import pandas as pd
+import asyncio
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -16,11 +17,11 @@ from telegram.ext import (
 from football_api import (
     find_national_team,
     find_club_team,
-    collect_team_dataset,
-    find_scheduled_fixture,
     get_scheduled_matches_from_competition,
+    async_collect_team_dataset,
+    async_get_scheduled_matches_from_competition,
 )
-from config import CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS, COMPETITIONS
+from config import FAST_COMPETITIONS, COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
 
 import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -119,37 +120,33 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard()
     )
 
-def get_scheduled_matches_by_date(date_from, date_to, competition_codes):
+async def get_scheduled_matches_by_date(date_from, date_to, competition_codes):
     all_matches = []
 
-    for code in competition_codes:
-        try:
-            matches = get_scheduled_matches_from_competition(
-                code,
-                date_from=date_from,
-                date_to=date_to
-            )
+    tasks = [async_get_scheduled_matches_from_competition(code, date_from=date_from, date_to=date_to) for code in competition_codes]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for m in matches:
-                all_matches.append({
-                    "home": m["homeTeam"]["name"],
-                    "away": m["awayTeam"]["name"],
-                    "utcDate": m["utcDate"],
-                    "competition": COMPETITIONS.get(code, code)
-                })
-
-        except Exception as e:
-            print(f"Error fetching matches for {code}: {e}")
+    for code, matches in zip(competition_codes, results):
+        if isinstance(matches, Exception):
+            print(f"Error fetching matches for {code}: {matches}")
+            continue
+        for m in matches:
+            all_matches.append({
+                "home": m["homeTeam"]["name"],
+                "away": m["awayTeam"]["name"],
+                "utcDate": m["utcDate"],
+                "competition": COMPETITIONS.get(code, code)
+            })
 
     return all_matches
 
 async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
 
-    matches = get_scheduled_matches_by_date(
+    matches = await get_scheduled_matches_by_date(
         today,
         today,
-        CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS
+        FAST_COMPETITIONS
     )
 
     if not matches:
@@ -168,12 +165,12 @@ async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tomorrow = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    matches = get_scheduled_matches_by_date(
+    matches = await get_scheduled_matches_by_date(
         tomorrow,
         tomorrow,
-        CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS
+        FAST_COMPETITIONS
     )
 
     if not matches:
@@ -220,10 +217,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif " vs " in query.data:
         match_text = query.data
-        fake_update = update
-        fake_update.message = query.message
-        fake_update.message.text = match_text
-        await handle_message(fake_update, context)
+        await process_match_request(query.message, context, match_text)
 
 def clamp_goals(value, min_goals=0, max_goals=4):
     return max(min_goals, min(max_goals, value))
@@ -362,6 +356,8 @@ def generate_explanation(home_stats, away_stats):
 async def process_match_request(message_obj, context, user_input: str):
     home_name, away_name = parse_match(user_input)
 
+    await message_obj.reply_text("⏳ Analyzing match...")
+
     if not home_name or not away_name:
         await message_obj.reply_text(
             "Invalid format.\n\nUse something like:\nReal Madrid vs Bayern",
@@ -385,10 +381,11 @@ async def process_match_request(message_obj, context, user_input: str):
         )
         return
 
-    fixture, fixture_code = None, None
 
-    home_stats = collect_team_dataset(home_team["id"], recent_limit=5)
-    away_stats = collect_team_dataset(away_team["id"], recent_limit=5)
+    home_stats, away_stats = await asyncio.gather(
+        async_collect_team_dataset(home_team["id"], recent_limit=5),
+        async_collect_team_dataset(away_team["id"], recent_limit=5)
+    )
 
     if home_stats is None:
         await message_obj.reply_text(
@@ -432,11 +429,26 @@ async def process_match_request(message_obj, context, user_input: str):
 
     lines = []
 
+    fixture = None
+    fixture_code = None
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    try:
+        matches = await get_scheduled_matches_by_date(today, tomorrow, FAST_COMPETITIONS)
+        for m in matches:
+            if home_team["name"].lower() in m["home"].lower() and away_team["name"].lower() in m["away"].lower():
+                fixture = m
+                fixture_code = m.get("competition")
+                break
+    except Exception:
+        pass
+
     if fixture:
-        fixture_home = fixture.get("homeTeam", {}).get("name", home_team["name"])
-        fixture_away = fixture.get("awayTeam", {}).get("name", away_team["name"])
-        utc_date = fixture.get("utcDate", "Unknown")
-        competition_name = COMPETITIONS.get(fixture_code, fixture_code)
+        fixture_home = fixture["home"]
+        fixture_away = fixture["away"]
+        utc_date = fixture["utcDate"]
+        competition_name = fixture.get("competition", "Unknown")
 
         local_time, day_name = convert_utc_to_local(utc_date, 7)
 

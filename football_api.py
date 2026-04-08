@@ -1,7 +1,9 @@
 import json
 import os
 import time
+import asyncio
 import requests
+import aiohttp
 
 from config import (
     API_KEY,
@@ -20,6 +22,31 @@ session.headers.update(HEADERS)
 
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+async def async_api_get(url, params=None, retries=5):
+    wait_time = 8
+    headers = HEADERS.copy()
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for attempt in range(retries):
+            try:
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 429:
+                        print(f"Rate limit hit. Waiting {wait_time} seconds...")
+                        await asyncio.sleep(wait_time)
+                        wait_time *= 2
+                        continue
+                    response.raise_for_status()
+                    return await response.json()
+            except aiohttp.ClientError as e:
+                if attempt == retries - 1:
+                    raise e
+                print(f"Attempt {attempt + 1} failed: {e}")
+                await asyncio.sleep(wait_time)
+                wait_time *= 2
+
+    raise Exception("Too many requests. Please wait and try again.")
 
 
 def api_get(url, params=None, retries=5):
@@ -143,10 +170,6 @@ def find_team_by_name(team_name: str, teams):
     return None
 
 
-def find_national_team(team_name: str):
-    teams = get_all_national_teams()
-    return find_team_by_name(team_name, teams)
-
 TEAM_CACHE = {}
 
 def find_club_team(team_name: str):
@@ -163,8 +186,24 @@ def find_club_team(team_name: str):
 
     return result
 
+NATIONAL_TEAM_CACHE = {}
 
-def get_recent_team_matches(team_id: int, limit: int = 10, use_cache=True):
+def find_national_team(team_name: str):
+    key = normalize_name(team_name)
+
+    if key in NATIONAL_TEAM_CACHE:
+        return NATIONAL_TEAM_CACHE[key]
+
+    teams = get_all_national_teams()
+    result = find_team_by_name(team_name, teams)
+
+    if result:
+        NATIONAL_TEAM_CACHE[key] = result
+
+    return result
+
+
+async def async_get_recent_team_matches(team_id: int, limit: int = 10, use_cache=True):
     cache_name = f"matches_{team_id}_{limit}.json"
 
     if use_cache:
@@ -178,15 +217,15 @@ def get_recent_team_matches(team_id: int, limit: int = 10, use_cache=True):
         "limit": limit
     }
 
-    data = api_get(url, params=params)
+    data = await async_api_get(url, params=params)
     matches = data.get("matches", [])
 
     save_cache(cache_name, matches)
     return matches
 
 
-def collect_team_dataset(team_id: int, recent_limit: int = 20):
-    matches = get_recent_team_matches(team_id, limit=recent_limit)
+async def async_collect_team_dataset(team_id: int, recent_limit: int = 20):
+    matches = await async_get_recent_team_matches(team_id, limit=recent_limit)
 
     if not matches:
         return None
@@ -374,7 +413,14 @@ def get_team_stats_before_match(team_id: int, all_matches: list, match_date: str
         "failed_to_score_rate": failed_to_score_rate,
     }
 
-def get_scheduled_matches_from_competition(code: str, date_from=None, date_to=None):
+async def async_get_scheduled_matches_from_competition(code: str, date_from=None, date_to=None, use_cache=True):
+    cache_name = f"scheduled_{code}_{date_from or 'none'}_{date_to or 'none'}.json"
+
+    if use_cache:
+        cached = load_cache(cache_name)
+        if cached is not None:
+            return cached
+
     url = f"{BASE_URL}/competitions/{code}/matches"
     params = {
         "status": "SCHEDULED"
@@ -385,8 +431,13 @@ def get_scheduled_matches_from_competition(code: str, date_from=None, date_to=No
     if date_to:
         params["dateTo"] = date_to
 
-    data = api_get(url, params=params)
-    return data.get("matches", [])
+    data = await async_api_get(url, params=params)
+    matches = data.get("matches", [])
+
+    if use_cache:
+        save_cache(cache_name, matches)
+
+    return matches
 
 def find_scheduled_match(home_name: str, away_name: str, competition_codes, date_from=None, date_to=None):
     home_name = home_name.lower().strip()
