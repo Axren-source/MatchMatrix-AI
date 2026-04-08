@@ -203,6 +203,7 @@ async def send_monthly_vip_invoice(message_obj, context):
         title="MatchMatrix VIP - 30 Days",
         description="Unlock full premium access to MatchMatrix AI for 30 days.",
         payload="vip_monthly_30d",
+        provider_token="",
         currency="XTR",
         prices=[LabeledPrice("30-Day VIP Access", VIP_PRICE_STARS)],
     )
