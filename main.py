@@ -385,14 +385,10 @@ async def process_match_request(message_obj, context, user_input: str):
         )
         return
 
-    fixture, fixture_code = find_scheduled_fixture(
-        home_team["name"],
-        away_team["name"],
-        competition_codes
-    )
+    fixture, fixture_code = None, None
 
-    home_stats = collect_team_dataset(home_team["id"], recent_limit=10)
-    away_stats = collect_team_dataset(away_team["id"], recent_limit=10)
+    home_stats = collect_team_dataset(home_team["id"], recent_limit=5)
+    away_stats = collect_team_dataset(away_team["id"], recent_limit=5)
 
     if home_stats is None:
         await message_obj.reply_text(

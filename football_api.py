@@ -71,7 +71,6 @@ def get_teams_from_competition(code: str, use_cache=True):
     teams = data.get("teams", [])
 
     save_cache(cache_name, teams)
-    time.sleep(1.0)
     return teams
 
 
@@ -148,10 +147,21 @@ def find_national_team(team_name: str):
     teams = get_all_national_teams()
     return find_team_by_name(team_name, teams)
 
+TEAM_CACHE = {}
 
 def find_club_team(team_name: str):
+    key = normalize_name(team_name)
+
+    if key in TEAM_CACHE:
+        return TEAM_CACHE[key]
+
     teams = get_all_club_teams()
-    return find_team_by_name(team_name, teams)
+    result = find_team_by_name(team_name, teams)
+
+    if result:
+        TEAM_CACHE[key] = result
+
+    return result
 
 
 def get_recent_team_matches(team_id: int, limit: int = 10, use_cache=True):
@@ -172,7 +182,6 @@ def get_recent_team_matches(team_id: int, limit: int = 10, use_cache=True):
     matches = data.get("matches", [])
 
     save_cache(cache_name, matches)
-    time.sleep(1.0)
     return matches
 
 
@@ -274,7 +283,6 @@ def get_matches_from_competition(code: str, season=None, use_cache=True):
         return []
 
     save_cache(cache_name, matches)
-    time.sleep(1.0)
     return matches
 
 
@@ -403,14 +411,25 @@ def find_scheduled_match(home_name: str, away_name: str, competition_codes, date
     return None
 
 
-def get_scheduled_matches_from_competition(code: str, date_from=None, date_to=None, use_cache=False):
-    """
-    Get scheduled matches from a competition.
-    """
+def team_name_matches(query: str, actual: str) -> bool:
+    if not query or not actual:
+        return False
+
+    normalized_query = normalize_name(query)
+    normalized_actual = normalize_name(actual)
+    return normalized_query in normalized_actual or normalized_actual in normalized_query
+
+
+def get_scheduled_matches_from_competition(code: str, date_from=None, date_to=None, use_cache=True):
+    cache_name = f"scheduled_{code}_{date_from}_{date_to}.json"
+
+    if use_cache:
+        cached = load_cache(cache_name)
+        if cached is not None:
+            return cached
+
     url = f"{BASE_URL}/competitions/{code}/matches"
-    params = {
-        "status": "SCHEDULED"
-    }
+    params = {"status": "SCHEDULED"}
 
     if date_from:
         params["dateFrom"] = date_from
@@ -418,12 +437,12 @@ def get_scheduled_matches_from_competition(code: str, date_from=None, date_to=No
         params["dateTo"] = date_to
 
     data = api_get(url, params=params)
-    return data.get("matches", [])
+    matches = data.get("matches", [])
 
-def team_name_matches(search_name: str, actual_name: str) -> bool:
-    search_name = normalize_name(search_name)
-    actual_name = normalize_name(actual_name)
-    return search_name in actual_name or actual_name in search_name
+    if use_cache:
+        save_cache(cache_name, matches)
+
+    return matches
 
 def find_scheduled_fixture(home_name: str, away_name: str, competition_codes, date_from=None, date_to=None):
     """
