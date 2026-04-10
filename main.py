@@ -156,6 +156,10 @@ def vip_expiry_text(user_id: int) -> str:
         return "Unknown"
 
 async def require_vip(message_obj, user_id: int):
+    # 👑 OWNER BYPASS
+    if user_id == OWNER_ID:
+        return True
+
     if is_vip(user_id):
         return True
 
