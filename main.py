@@ -156,6 +156,7 @@ def vip_expiry_text(user_id: int) -> str:
         return "Unknown"
 
 async def require_vip(message_obj, user_id: int):
+    print("require_vip user_id =", user_id, "OWNER_ID =", OWNER_ID)
     # 👑 OWNER BYPASS
     if user_id == OWNER_ID:
         return True
@@ -360,7 +361,12 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif " vs " in query.data:
         match_text = query.data
-        await process_match_request(query.message, context, match_text)
+        await process_match_request(
+           query.message,
+           context,
+           match_text,
+           update.effective_user.id
+        )
 
 def clamp_goals(value, min_goals=0, max_goals=4):
     return max(min_goals, min(max_goals, value))
@@ -496,8 +502,7 @@ def generate_explanation(home_stats, away_stats):
 
     return ", ".join(reasons).capitalize() + "."
 
-async def process_match_request(message_obj, context, user_input: str):
-    user_id = message_obj.from_user.id
+async def process_match_request(message_obj, context, user_input: str, user_id: int):
     if not await require_vip(message_obj, user_id):
         return
     home_name, away_name = parse_match(user_input)
@@ -636,7 +641,12 @@ async def process_match_request(message_obj, context, user_input: str):
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await process_match_request(update.message, context, update.message.text.strip())
+    await process_match_request(
+        update.message,
+        context,
+        update.message.text.strip(),
+        update.effective_user.id
+    )
 
 
 def main():
