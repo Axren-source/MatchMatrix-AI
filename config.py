@@ -16,10 +16,8 @@ COMPETITIONS = {
     "EC": "European Championship",
     "SA": "Serie A",
     "PL": "Premier League"
-    "EU": "UEFA Europa League"
-    "UCF": "UEFA Conference League"
 }
 
-CLUB_COMPETITIONS = ["CL", "BL1", "DED", "BSA", "PD", "FL1", "ELC", "PPL", "SA", "PL", "EU", "UCF"]
+CLUB_COMPETITIONS = ["CL", "BL1", "DED", "BSA", "PD", "FL1", "ELC", "PPL", "SA", "PL"]
 INTERNATIONAL_COMPETITIONS = ["WC", "EC"]
 FAST_COMPETITIONS = CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS
