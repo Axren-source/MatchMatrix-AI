@@ -1,23 +1,28 @@
 import os
+import aiohttp
 
 API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://v3.football.api-sports.io"
 
+# ✅ USE REAL LEAGUE IDS
 COMPETITIONS = {
-    "WC": "FIFA World Cup",
-    "CL": "UEFA Champions League",
-    "BL1": "Bundesliga",
-    "DED": "Eredivisie",
-    "BSA": "Campeonato Brasileiro Série A",
-    "PD": "Primera Division",
-    "FL1": "Ligue 1",
-    "ELC": "Championship",
-    "PPL": "Primeira Liga",
-    "EC": "European Championship",
-    "SA": "Serie A",
-    "PL": "Premier League"
+    1: "FIFA World Cup",
+    2: "UEFA Champions League",
+    78: "Bundesliga",
+    88: "Eredivisie",
+    71: "Campeonato Brasileiro Série A",
+    140: "La Liga",
+    61: "Ligue 1",
+    72: "Championship",
+    94: "Primeira Liga",
+    4: "European Championship",
+    135: "Serie A",
+    39: "Premier League"
 }
 
-CLUB_COMPETITIONS = ["CL", "BL1", "DED", "BSA", "PD", "FL1", "ELC", "PPL", "SA", "PL"]
-INTERNATIONAL_COMPETITIONS = ["WC", "EC"]
-FAST_COMPETITIONS = CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS
+# ✅ SPLIT TYPES
+CLUB_COMPETITIONS = [2, 78, 88, 71, 140, 61, 72, 94, 135, 39]
+INTERNATIONAL_COMPETITIONS = [1, 4]
+
+# ✅ FAST MODE (LIMIT FOR SPEED)
+FAST_COMPETITIONS = [39, 140, 78]  # EPL, La Liga, Bundesliga only
