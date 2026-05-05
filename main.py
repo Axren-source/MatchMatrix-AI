@@ -1,6 +1,4 @@
 import pickle
-import aiohttp
-from matplotlib import lines
 import pandas as pd
 import asyncio
 import json
