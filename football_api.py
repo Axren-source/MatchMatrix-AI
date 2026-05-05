@@ -245,14 +245,22 @@ async def async_get_scheduled_matches_from_competition(code=None, date_from=None
     if date_to:
         params["dateTo"] = date_to
 
+    # If code provided, query specific competition; otherwise query all matches
     endpoint = f"competitions/{code}/matches" if code else "matches"
 
-    data = await async_api_get(endpoint, params)
-
-    if not data or "matches" not in data:
+    try:
+        data = await async_api_get(endpoint, params)
+        
+        if not data:
+            print(f"⚠️ No data from {endpoint}")
+            return []
+        
+        matches = data.get("matches", [])
+        print(f"✅ Found {len(matches)} scheduled matches from {endpoint}")
+        return matches
+    except Exception as e:
+        print(f"❌ Error fetching from {endpoint}: {e}")
         return []
-
-    return data["matches"]
 
 
 # =========================

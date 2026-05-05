@@ -397,6 +397,8 @@ async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     
+    await update.message.reply_text("⏳ Fetching today's matches...")
+    
     matches = await get_scheduled_matches_by_date(
         today,
         today,
@@ -404,17 +406,29 @@ async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if not matches:
-        await update.message.reply_text("No matches found today.")
+        # Try fetching from all competitions if fast ones fail
+        print("ℹ️ No matches in fast competitions, trying all...")
+        matches = await get_scheduled_matches_by_date(today, today, None)
+
+    if not matches:
+        await update.message.reply_text(
+            "📭 No scheduled matches found for today.\n\n"
+            "Try /tomorrow or search manually (e.g., 'Arsenal vs Liverpool')"
+        )
         return
 
     keyboard = []
+    for m in matches[:15]:
+        if m.get('home') and m.get('away'):
+            text = f"{m['home']} vs {m['away']}"
+            keyboard.append([InlineKeyboardButton(text, callback_data=text)])
 
-    for m in matches[:12]:
-        text = f"{m['home']} vs {m['away']}"
-        keyboard.append([InlineKeyboardButton(text, callback_data=text)])
+    if not keyboard:
+        await update.message.reply_text("❌ Could not parse match data.")
+        return
 
     await update.message.reply_text(
-        "📅 Today's Matches 👇",
+        f"📅 Today's Matches ({len(keyboard)}):\n\n",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -424,24 +438,38 @@ async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%d")
 
+    await update.message.reply_text("⏳ Fetching tomorrow's matches...")
+
     matches = await get_scheduled_matches_by_date(
         tomorrow,
         tomorrow,
         FAST_COMPETITIONS
     )
+    
+    if not matches:
+        # Try fetching from all competitions if fast ones fail
+        print("ℹ️ No matches in fast competitions, trying all...")
+        matches = await get_scheduled_matches_by_date(tomorrow, tomorrow, None)
 
     if not matches:
-        await update.message.reply_text("No matches found tomorrow.")
+        await update.message.reply_text(
+            "📭 No scheduled matches found for tomorrow.\n\n"
+            "Try searching manually (e.g., 'Bayern vs Arsenal')"
+        )
         return
 
     keyboard = []
+    for m in matches[:15]:
+        if m.get('home') and m.get('away'):
+            text = f"{m['home']} vs {m['away']}"
+            keyboard.append([InlineKeyboardButton(text, callback_data=text)])
 
-    for m in matches[:12]:
-        text = f"{m['home']} vs {m['away']}"
-        keyboard.append([InlineKeyboardButton(text, callback_data=text)])
+    if not keyboard:
+        await update.message.reply_text("❌ Could not parse match data.")
+        return
 
     await update.message.reply_text(
-        "📅 Tomorrow Matches 👇",
+        f"📅 Tomorrow's Matches ({len(keyboard)}):\n\n",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -627,22 +655,26 @@ def detect_match_mode(home_name, away_name, selected_mode=None):
     if selected_mode == "club":
         home_team = find_club_team(home_name)
         away_team = find_club_team(away_name)
-        return home_team, away_team, 0, CLUB_COMPETITIONS
+        if home_team and away_team and home_team['id'] != away_team['id']:
+            return home_team, away_team, 0, CLUB_COMPETITIONS
+        return None, None, None, None
 
     if selected_mode == "international":
         home_team = find_national_team(home_name)
         away_team = find_national_team(away_name)
-        return home_team, away_team, 1, INTERNATIONAL_COMPETITIONS
+        if home_team and away_team and home_team['id'] != away_team['id']:
+            return home_team, away_team, 1, INTERNATIONAL_COMPETITIONS
+        return None, None, None, None
 
     # Auto mode: try clubs first, then national teams
     home_team = find_club_team(home_name)
     away_team = find_club_team(away_name)
-    if home_team and away_team:
+    if home_team and away_team and home_team['id'] != away_team['id']:
         return home_team, away_team, 0, CLUB_COMPETITIONS
 
     home_team = find_national_team(home_name)
     away_team = find_national_team(away_name)
-    if home_team and away_team:
+    if home_team and away_team and home_team['id'] != away_team['id']:
         return home_team, away_team, 1, INTERNATIONAL_COMPETITIONS
 
     return None, None, None, None
@@ -754,17 +786,42 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     else:
         verdict = "Draw"
 
-    # 🔥 OUTPUT
+    # 🔥 OUTPUT - Enhanced with betting tips
     msg = (
         f"📊 {home_team['name']} vs {away_team['name']}\n\n"
+        f"💰 WIN PROBABILITIES:\n"
         f"🏠 {home_team['name']}: {home_win:.1f}%\n"
         f"🤝 Draw: {draw:.1f}%\n"
         f"✈️ {away_team['name']}: {away_win:.1f}%\n\n"
-        f"⚽ Score: {main_score}\n"
-        f"Alt: {', '.join(alt_scores)}\n\n"
-        f"xG: {xg_home:.2f} - {xg_away:.2f}\n\n"
-        f"🏆 Prediction: {verdict}"
+        f"⚽ PREDICTED SCORE: {main_score}\n"
+        f"Alt scores: {', '.join(alt_scores)}\n"
+        f"Expected Goals: {xg_home:.2f} - {xg_away:.2f}\n\n"
+        f"🏆 PREDICTION: {verdict}\n\n"
     )
+    
+    # Add betting tips
+    tips = []
+    if home_win > 50:
+        tips.append(f"✅ Strong home advantage: {home_team['name']} in excellent form")
+    if away_win > 50:
+        tips.append(f"✅ Away team threat: {away_team['name']} playing well on the road")
+    if draw >= 40:
+        tips.append(f"⚖️ High draw probability ({draw:.0f}%) - consider both 1X2 and draw bets")
+    if home_stats['goals_scored_avg'] > 2 and away_stats['goals_scored_avg'] > 2:
+        tips.append(f"⚽ OVER 2.5 likely - Both teams score freely")
+    elif xg_home + xg_away < 2.5:
+        tips.append(f"🔒 UNDER 2.5 likely - Defensive match expected")
+    if home_stats['clean_sheet_rate'] > 0.6:
+        tips.append(f"🛡️ {home_team['name']} strong defense - BTTS unlikely")
+    if abs(home_win - away_win) < 5:
+        tips.append(f"🎯 Close match - High odds on underdog")
+    
+    if tips:
+        msg += "💡 BETTING TIPS:\n"
+        for i, tip in enumerate(tips[:5], 1):
+            msg += f"{i}. {tip}\n"
+    
+    msg += f"\n📈 CONFIDENCE: {'High' if max(home_win, draw, away_win) > 45 else 'Medium' if max(home_win, draw, away_win) > 35 else 'Low'}"
 
     await message_obj.reply_text(msg)
 
