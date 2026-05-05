@@ -21,11 +21,14 @@ from telegram.ext import (
 )
 
 from football_api import (
+    async_api_get,
     find_national_team,
     find_club_team,
     get_scheduled_matches_from_competition,
     async_collect_team_dataset,
     async_get_scheduled_matches_from_competition,
+    search_teams_database,
+    compute_match_intensity
 )
 from config import API_KEY, BASE_URL, FAST_COMPETITIONS, COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
 
@@ -493,34 +496,20 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def get_team_player_form(team_id):
-    """
-    Estimate team strength from recent player performances
-    """
     try:
-        matches = await async_collect_team_dataset(team_id, recent_limit=5)
-        if not matches:
-            return {
-                "attack_boost": 0,
-                "defense_boost": 0
-            }
+        matches = await async_collect_team_dataset(team_id, limit=5)
+        stats = calculate_team_stats(matches)
 
-        goals = matches["goals_scored_avg"]
-        conceded = matches["goals_conceded_avg"]
-
-        # Normalize impact
-        attack_boost = min(goals * 0.2, 0.6)
-        defense_boost = min((1.5 - conceded) * 0.2, 0.6)
+        if not stats:
+            return {"attack_boost": 0, "defense_boost": 0}
 
         return {
-            "attack_boost": attack_boost,
-            "defense_boost": defense_boost
+            "attack_boost": min(stats["goals_scored_avg"] * 0.2, 0.6),
+            "defense_boost": min((1.5 - stats["goals_conceded_avg"]) * 0.2, 0.6)
         }
 
     except Exception:
-        return {
-            "attack_boost": 0,
-            "defense_boost": 0
-        }
+        return {"attack_boost": 0, "defense_boost": 0}
 
 def clamp_goals(value, min_goals=0, max_goals=4):
     return max(min_goals, min(max_goals, value))
@@ -669,101 +658,114 @@ def generate_explanation(home_stats, away_stats):
 
     return ", ".join(reasons).capitalize() + "."
 
+def calculate_team_stats(matches):
+    if not matches:
+        return None
+
+    wins = draws = losses = 0
+    goals_for = goals_against = 0
+    clean_sheets = failed_to_score = 0
+
+    for m in matches:
+        score = m.get("score", {}).get("fullTime", {})
+        home = score.get("home", 0)
+        away = score.get("away", 0)
+
+        if home is None or away is None:
+            continue
+
+        goals_for += home
+        goals_against += away
+
+        if home > away:
+            wins += 1
+        elif home == away:
+            draws += 1
+        else:
+            losses += 1
+
+        if away == 0:
+            clean_sheets += 1
+        if home == 0:
+            failed_to_score += 1
+
+    total = max(len(matches), 1)
+
+    return {
+        "form_points": wins * 3 + draws,
+        "goals_scored_avg": goals_for / total,
+        "goals_conceded_avg": goals_against / total,
+        "goal_diff_avg": (goals_for - goals_against) / total,
+        "win_rate": wins / total,
+        "clean_sheet_rate": clean_sheets / total,
+        "failed_to_score_rate": failed_to_score / total
+    }
+
 async def process_match_request(message_obj, context, user_input: str, user_id: int):
     if not await require_vip(message_obj, user_id):
         return
+
     home_name, away_name = parse_match(user_input)
 
-    await message_obj.reply_text("⏳ Analyzing match...")
-
     if not home_name or not away_name:
-        await message_obj.reply_text(
-            "Invalid format.\n\nUse something like:\nReal Madrid vs Bayern",
-            reply_markup=main_menu_keyboard()
-        )
+        await message_obj.reply_text("Use format: Team A vs Team B")
         return
 
+    await message_obj.reply_text("⏳ Analyzing...")
+
     mode = context.user_data.get("mode")
-    home_team, away_team, is_international, competition_codes = detect_match_mode(
+    home_team, away_team, is_international, _ = detect_match_mode(
         home_name, away_name, mode
     )
 
     if not home_team or not away_team:
-        missing = []
-        if not home_team:
-            missing.append(home_name)
-        if not away_team:
-            missing.append(away_name)
-        
-        await message_obj.reply_text(
-            f"❌ Team not found: {', '.join(missing)}\n\n"
-            "Try these exact formats:\n"
-            "• Real Madrid\n"
-            "• Manchester United\n"
-            "• FC Bayern München\n"
-            "• PSG\n"
-            "• France\n"
-            "• Brazil\n\n"
-            "Tip: Use team's short common names.",
-            reply_markup=main_menu_keyboard()
-        )
+        await message_obj.reply_text("❌ Team not found.")
         return
 
-    try:
-        home_stats, away_stats, home_form_boost, away_form_boost = await asyncio.gather(
-            async_collect_team_dataset(home_team["id"], recent_limit=5),
-            async_collect_team_dataset(away_team["id"], recent_limit=5),
-            get_team_player_form(home_team["id"]),
-            get_team_player_form(away_team["id"])
-        )
+    # 🔥 GET MATCH DATA
+    home_data, away_data = await asyncio.gather(
+        async_api_get(f"teams/{home_team['id']}/matches", {"status": "FINISHED", "limit": 5}),
+        async_api_get(f"teams/{away_team['id']}/matches", {"status": "FINISHED", "limit": 5}),
+    )
 
-        home_players = get_team_players(home_team["id"])
-        away_players = get_team_players(away_team["id"])
-        home_player_impact = calculate_player_impact(home_players)
-        away_player_impact = calculate_player_impact(away_players)
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Error fetching data: {error_msg}")
-        if "402" in error_msg:
-            await message_obj.reply_text(
-                "❌ API Error: Invalid API key or account issue.\n\n"
-                "Please check:\n"
-                "1. API_KEY environment variable is set\n"
-                "2. Your API account has active credits",
-                reply_markup=main_menu_keyboard()
-            )
-        else:
-            await message_obj.reply_text(
-                f"❌ Error analyzing match: {error_msg}\n\nPlease try again later.",
-                reply_markup=main_menu_keyboard()
-            )
+    home_matches = home_data.get("matches", []) if home_data else []
+    away_matches = away_data.get("matches", []) if away_data else []
+
+    # 🔥 BUILD STATS
+    home_stats = calculate_team_stats(home_matches)
+    away_stats = calculate_team_stats(away_matches)
+
+    if not home_stats or not away_stats:
+        await message_obj.reply_text("❌ Not enough data.")
         return
 
-    if home_stats is None:
-        await message_obj.reply_text(
-            f"Not enough recent data for {home_team['name']}.",
-            reply_markup=main_menu_keyboard()
-        )
-        return
+    # 🔥 PLAYER IMPACT
+    home_players = get_team_players(home_team["id"])
+    away_players = get_team_players(away_team["id"])
 
-    if away_stats is None:
-        await message_obj.reply_text(
-            f"Not enough recent data for {away_team['name']}.",
-            reply_markup=main_menu_keyboard()
-        )
-        return
+    home_player_impact = calculate_player_impact(home_players)
+    away_player_impact = calculate_player_impact(away_players)
 
-    X = build_feature_vector(home_stats, away_stats, is_international, home_player_impact, away_player_impact)
+    # 🔥 FORM BOOST
+    home_form_boost = await get_team_player_form(home_team["id"])
+    away_form_boost = await get_team_player_form(away_team["id"])
+
+    # 🔥 AI MODEL
+    X = build_feature_vector(
+        home_stats,
+        away_stats,
+        is_international,
+        home_player_impact,
+        away_player_impact
+    )
+
     probs = model.predict_proba(X)[0]
 
     away_win = probs[0] * 100
     draw = probs[1] * 100
     home_win = probs[2] * 100
 
-    best_prob = max(home_win, draw, away_win)
-    confidence = get_confidence(best_prob)
-    explanation = generate_explanation(home_stats, away_stats)
-
+    # 🔥 SCORE PREDICTION
     main_score, alt_scores, xg_home, xg_away = predict_scorelines(
         home_stats,
         away_stats,
@@ -776,86 +778,27 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         away_player_impact
     )
 
-    if home_win > draw and home_win > away_win:
+    # 🔥 RESULT
+    if home_win > away_win and home_win > draw:
         verdict = f"{home_team['name']} win"
-    elif away_win > draw and away_win > home_win:
+    elif away_win > home_win and away_win > draw:
         verdict = f"{away_team['name']} win"
     else:
         verdict = "Draw"
 
-    lines = []
-
-    fixture = None
-    fixture_code = None
-    today = datetime.now(UTC).strftime("%Y-%m-%d")
-    tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    try:
-        matches = await get_scheduled_matches_by_date(today, tomorrow, FAST_COMPETITIONS)
-        for m in matches:
-            if home_team["name"].lower() in m["home"].lower() and away_team["name"].lower() in m["away"].lower():
-                fixture = m
-                fixture_code = m.get("competition")
-                break
-    except Exception:
-        pass
-
-    if fixture:
-        fixture_home = fixture["home"]
-        fixture_away = fixture["away"]
-        utc_date = fixture["utcDate"]
-        competition_name = fixture.get("competition", "Unknown")
-
-        local_time, day_name = convert_utc_to_local(utc_date, 7)
-
-        lines.append("📅 Match Found")
-        lines.append(f"{fixture_home} vs {fixture_away}")
-        lines.append(f"🏆 {competition_name}")
-        lines.append(f"🗓 {local_time} ({day_name})")
-        lines.append("")
-    else:
-        lines.append("📊 Team-vs-team analysis")
-        lines.append("No scheduled fixture found.")
-        lines.append("")
-
-    lines.append("📈 Prediction")
-    lines.append(f"{home_team['name']}: {home_win:.1f}%")
-    lines.append(f"Draw: {draw:.1f}%")
-    lines.append(f"{away_team['name']}: {away_win:.1f}%")
-    lines.append("")
-    lines.append("🧍 Player Analysis")
-    lines.append(f"{home_team['name']} attack: {home_player_impact['attack']}")
-    lines.append(f"{away_team['name']} attack: {away_player_impact['attack']}")
-    lines.append(f"{home_team['name']} defense: {home_player_impact['defense']}")
-    lines.append(f"{away_team['name']} defense: {away_player_impact['defense']}")
-    lines.append("")
-    lines.append("⚽ Score Prediction")
-    lines.append(f"Most likely score: {main_score}")
-    lines.append(f"Other likely scores: {', '.join(alt_scores)}")
-    lines.append(f"xG estimate: {home_team['name']} {xg_home:.2f} - {xg_away:.2f} {away_team['name']}")
-    lines.append("")
-    lines.append(f"Likely winner from score: {verdict}")
-    lines.append("")
-    lines.append("🧍 Player Impact")
-    lines.append(f"{home_team['name']}: +{home_form_boost['attack_boost']:.2f} attack")
-    lines.append(f"{away_team['name']}: +{away_form_boost['attack_boost']:.2f} attack")
-    lines.append(f"{home_team['name']}: -{home_form_boost['defense_boost']:.2f} defense")
-    lines.append(f"{away_team['name']}: -{away_form_boost['defense_boost']:.2f} defense")
-    lines.append("")
-    lines.append(f"🧠 Insight: {explanation}")
-
-    confidence_emoji = {
-        "High": "🟢",
-        "Medium": "🟡",
-        "Low": "🔴"
-    }.get(confidence, "")
-
-    lines.append(f"🔎 Confidence: {confidence_emoji} {confidence}")
-
-    await message_obj.reply_text(
-        "\n".join(lines),
-        reply_markup=main_menu_keyboard()
+    # 🔥 OUTPUT
+    msg = (
+        f"📊 {home_team['name']} vs {away_team['name']}\n\n"
+        f"🏠 {home_team['name']}: {home_win:.1f}%\n"
+        f"🤝 Draw: {draw:.1f}%\n"
+        f"✈️ {away_team['name']}: {away_win:.1f}%\n\n"
+        f"⚽ Score: {main_score}\n"
+        f"Alt: {', '.join(alt_scores)}\n\n"
+        f"xG: {xg_home:.2f} - {xg_away:.2f}\n\n"
+        f"🏆 Prediction: {verdict}"
     )
+
+    await message_obj.reply_text(msg)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_match_request(
