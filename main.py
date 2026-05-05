@@ -359,6 +359,8 @@ async def get_scheduled_matches_by_date(date_from, date_to, competition_codes=No
                     all_matches.append({
                         "home": home,
                         "away": away,
+                        "home_id": m.get("homeTeam", {}).get("id"),
+                        "away_id": m.get("awayTeam", {}).get("id"),
                         "utcDate": utc_date,
                         "competition": competition_name
                     })
@@ -432,7 +434,7 @@ async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for m in matches[:15]:
         if m.get('home') and m.get('away'):
             text = f"{m['home']} vs {m['away']}"
-            callback_data = make_match_callback(text)
+            callback_data = f"matchid:{m['home_id']}:{m['away_id']}"
             keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
     if not keyboard:
@@ -474,7 +476,7 @@ async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for m in matches[:15]:
         if m.get('home') and m.get('away'):
             text = f"{m['home']} vs {m['away']}"
-            callback_data = make_match_callback(text)
+            callback_data = f"matchid:{m['home_id']}:{m['away_id']}"
             keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
     if not keyboard:
@@ -501,6 +503,28 @@ def get_team_players(team_id):
     except Exception as e:
         print(f"Error fetching players: {e}")
         return []
+    
+async def process_match_by_id(message_obj, context, home_id, away_id, user_id):
+    if not await require_vip(message_obj, user_id):
+        return
+
+    await message_obj.reply_text("⏳ Analyzing match...")
+
+    home_team = {"id": home_id, "name": f"Home {home_id}"}
+    away_team = {"id": away_id, "name": f"Away {away_id}"}
+
+    # Fetch real names
+    home_data = await async_api_get(f"teams/{home_id}")
+    away_data = await async_api_get(f"teams/{away_id}")
+
+    if home_data:
+        home_team["name"] = home_data.get("name")
+
+    if away_data:
+        away_team["name"] = away_data.get("name")
+
+    # Continue EXACT SAME logic as process_match_request
+
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -531,7 +555,16 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "vip_monthly":
         await send_monthly_vip_invoice(query.message, context)
 
-    elif query.data.startswith("match:"):
+    elif query.data.startswith("matchid:"):
+        _, home_id, away_id = query.data.split(":")
+
+        await process_match_by_id(
+            query.message,
+            context,
+            int(home_id),
+            int(away_id),
+            update.effective_user.id
+        )
         match_text = MATCH_BUTTON_CACHE.get(query.data)
         if not match_text:
             await query.message.reply_text(

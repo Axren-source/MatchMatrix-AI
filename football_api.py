@@ -87,25 +87,39 @@ def score_match(query, team_name):
     return 0
 
 def find_team_by_name(name: str):
-    params = {"name": name}
-    data = api_get("teams", params)
+    print(f"🔍 Searching team: {name}")
 
-    if not data or not data.get("teams"):
+    data = api_get("teams")  # NO params
+
+    if not data or "teams" not in data:
+        print("❌ No teams returned from API")
         return None
 
-    teams = data["teams"]
+    name_lower = name.lower()
+    best_match = None
+    best_score = 0
 
-    # 🔥 pick best match instead of first
-    best = max(teams, key=lambda t: score_match(name, t.get("name", "")))
+    for team in data["teams"]:
+        team_name = team.get("name", "").lower()
 
-    return {
-        "id": best.get("id"),
-        "name": best.get("name"),
-        "shortName": best.get("shortName"),
-        "tla": best.get("tla"),
-        "country": best.get("area", {}).get("name", ""),
-        "crest": best.get("crest")
-    }
+        score = 0
+        if name_lower == team_name:
+            score = 100
+        elif name_lower in team_name:
+            score = 80
+        elif team_name.startswith(name_lower):
+            score = 70
+
+        if score > best_score:
+            best_score = score
+            best_match = team
+
+    if best_match:
+        print(f"✅ Found: {best_match['name']}")
+        return best_match
+
+    print("❌ No match found")
+    return None
 
 # =========================
 # TEAM STATS ENGINE (🔥 CORE LOGIC)
