@@ -10,34 +10,33 @@ BASE_URL = "https://api.football-data.org/v4/"
 COMPETITIONS = {
     # International
     "WC": "FIFA World Cup",
-    "EC": "Euro Championship",
+    "EC": "UEFA European Championship",
     
-    # Europe - Top Leagues
+    # Top Leagues
     "PL": "Premier League",
     "PD": "La Liga",
     "BL1": "Bundesliga",
     "SA": "Serie A",
     "FL1": "Ligue 1",
     
-    # Europe - Other Leagues
+    # Secondary
     "PPL": "Primeira Liga",
     "DED": "Eredivisie",
     "ELC": "Championship",
     
-    # Europe - Cups
+    # European Cups
     "CL": "UEFA Champions League",
     "EL": "UEFA Europa League",
-    "EC": "Euro Championship",
     
     # Americas
     "BSA": "Brasileirão",
     "MLS": "Major League Soccer",
     
-    # Other
+    # Others
     "CLI": "Copa Libertadores",
     "CAF": "African Cup of Nations"
 }
 
-CLUB_COMPETITIONS = ["PL", "PD", "BL1", "SA", "FL1", "CL", "PPL", "DED", "ELC", "BSA", "MLS", "EL"]
+CLUB_COMPETITIONS = ["PL", "PD", "BL1", "SA", "FL1", "CL", "EL"]
 INTERNATIONAL_COMPETITIONS = ["WC", "EC", "CAF"]
-FAST_COMPETITIONS = ["PL", "PD", "BL1", "SA", "FL1", "CL"]
+FAST_COMPETITIONS = ["PL", "PD", "BL1", "SA", "FL1"]

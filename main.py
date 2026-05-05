@@ -338,18 +338,20 @@ async def vip_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_scheduled_matches_by_date(date_from, date_to, competition_codes=None):
     all_matches = []
 
-    try:
-        matches = await async_get_scheduled_matches_from_competition(None, date_from=date_from, date_to=date_to)
-        
-        if not matches or isinstance(matches, Exception):
-            print(f"⚠️ No matches found for {date_from} to {date_to}")
-            return all_matches
+    competitions = competition_codes or FAST_COMPETITIONS
 
-        print(f"✅ Found {len(matches)} matches")
-        
-        for m in matches:
-            try:
-                # Handle both camelCase (API v4) field names
+    for code in competitions:
+        try:
+            data = await async_get_scheduled_matches_from_competition(
+                code,
+                date_from=date_from,
+                date_to=date_to
+            )
+
+            if not data:
+                continue
+
+            for m in data:
                 home = m.get("homeTeam", {}).get("name")
                 away = m.get("awayTeam", {}).get("name")
                 utc_date = m.get("utcDate")
@@ -359,17 +361,13 @@ async def get_scheduled_matches_by_date(date_from, date_to, competition_codes=No
                     all_matches.append({
                         "home": home,
                         "away": away,
-                        "home_id": m.get("homeTeam", {}).get("id"),
-                        "away_id": m.get("awayTeam", {}).get("id"),
                         "utcDate": utc_date,
                         "competition": competition_name
                     })
-            except Exception as e:
-                print(f"Error parsing match: {e}")
-                continue
-    except Exception as e:
-        print(f"Error fetching matches: {e}")
-    
+
+        except Exception as e:
+            print(f"Error fetching {code}: {e}")
+
     return all_matches
 
 def calculate_player_impact(players):
@@ -522,6 +520,7 @@ async def process_match_by_id(message_obj, context, home_id, away_id, user_id):
     home_team = home_data
     away_team = away_data
 
+
     # 🔥 SAME AS MAIN LOGIC
     home_matches, away_matches = await asyncio.gather(
         async_api_get(f"teams/{home_id}/matches", {"status": "FINISHED", "limit": 5}),
@@ -530,6 +529,51 @@ async def process_match_by_id(message_obj, context, home_id, away_id, user_id):
 
     home_stats = compute_team_stats(home_matches.get("matches", []), home_id)
     away_stats = compute_team_stats(away_matches.get("matches", []), away_id)
+
+    # ADD THIS AFTER STATS
+
+    home_players = get_team_players(home_id)
+    away_players = get_team_players(away_id)
+
+    home_player_impact = calculate_player_impact(home_players)
+    away_player_impact = calculate_player_impact(away_players)
+
+    home_form_boost = await get_team_player_form(home_id)
+    away_form_boost = await get_team_player_form(away_id)
+
+    X = build_feature_vector(
+        home_stats,
+        away_stats,
+        0,
+        home_player_impact,
+        away_player_impact
+    )
+
+    try:
+        probs = model.predict_proba(X)[0]
+        away_win = probs[0] * 100
+        draw = probs[1] * 100
+        home_win = probs[2] * 100
+    except:
+        home_win, draw, away_win = calculate_win_chances(home_stats, away_stats)
+
+    main_score, alt_scores, xg_home, xg_away = predict_scorelines(
+        home_stats,
+        away_stats,
+        home_win,
+        draw,
+        away_win,
+        home_form_boost,
+        away_form_boost,
+        home_player_impact,
+        away_player_impact
+    )
+
+    await message_obj.reply_text(
+        f"📊 {home_team['name']} vs {away_team['name']}\n\n"
+        f"🏠 {home_win:.1f}% | 🤝 {draw:.1f}% | ✈️ {away_win:.1f}%\n"
+        f"⚽ Score: {main_score}"
+    )
 
     if not home_stats or not away_stats:
         await message_obj.reply_text("❌ Not enough data.")
