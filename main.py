@@ -535,11 +535,6 @@ async def process_match_by_id(message_obj, context, home_id, away_id, user_id):
         await message_obj.reply_text("❌ Not enough data.")
         return
 
-    # 👉 reuse your prediction logic here
-    await message_obj.reply_text(
-        f"📊 {home_team['name']} vs {away_team['name']}\n\n✅ Analysis working!"
-    )
-
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
