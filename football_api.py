@@ -90,6 +90,23 @@ def save_cache(filename, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def clear_cache():
+    """Clear all cached data"""
+    if os.path.exists(CACHE_DIR):
+        for file in os.listdir(CACHE_DIR):
+            file_path = os.path.join(CACHE_DIR, file)
+            try:
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                    print(f"Cleared cache: {file}")
+            except Exception as e:
+                print(f"Error clearing {file}: {e}")
+    # Also clear in-memory caches
+    TEAM_CACHE.clear()
+    NATIONAL_TEAM_CACHE.clear()
+    print("Cache cleared successfully")
+
+
 def normalize_name(name: str) -> str:
     return " ".join(name.lower().strip().split())
 
@@ -103,11 +120,21 @@ def get_teams_from_competition(code: str, use_cache=True):
             return cached
 
     url = f"{BASE_URL}/competitions/{code}/teams"
-    data = api_get(url)
-    teams = data.get("teams", [])
-
-    save_cache(cache_name, teams)
-    return teams
+    try:
+        data = api_get(url)
+        # Football-api returns teams under 'response' key
+        teams = data.get("response", [])
+        if not teams:
+            print(f"Warning: No teams found for competition {code}. API response: {data}")
+        save_cache(cache_name, teams)
+        return teams
+    except Exception as e:
+        print(f"Error fetching teams for competition {code}: {e}")
+        # Try to return cached data even if expired
+        cached = load_cache(cache_name)
+        if cached:
+            return cached
+        return []
 
 
 def get_all_teams_from_competitions(codes, use_cache=True):
@@ -150,6 +177,10 @@ def get_all_national_teams(use_cache=True):
 
 def find_team_by_name(team_name: str, teams):
     target = normalize_name(team_name)
+    
+    if not teams:
+        print(f"Warning: No teams data to search through for '{team_name}'")
+        return None
 
     exact_match = None
     partial_matches = []
@@ -163,19 +194,28 @@ def find_team_by_name(team_name: str, teams):
 
         lowered = [normalize_name(name) for name in possible_names if name]
 
+        # Exact match on any field
         if target in lowered:
             exact_match = team
             break
 
+        # Partial match (target is substring of team name)
         if any(target in name for name in lowered):
+            partial_matches.append(team)
+        
+        # Also check reverse - team name is substring of target (handles "Real Madrid CF" when searching "Real Madrid")
+        if any(name in target for name in lowered):
             partial_matches.append(team)
 
     if exact_match:
+        print(f"Found exact match for '{team_name}': {exact_match.get('name')}")
         return exact_match
 
     if partial_matches:
+        print(f"Found partial match for '{team_name}': {partial_matches[0].get('name')}")
         return partial_matches[0]
 
+    print(f"No team found for '{team_name}' in {len(teams)} teams")
     return None
 
 
@@ -185,13 +225,18 @@ def find_club_team(team_name: str):
     key = normalize_name(team_name)
 
     if key in TEAM_CACHE:
+        print(f"Returning cached club team for '{team_name}'")
         return TEAM_CACHE[key]
 
-    teams = get_all_club_teams()
+    print(f"Searching for club team: '{team_name}'")
+    teams = get_all_club_teams(use_cache=True)
+    print(f"Loaded {len(teams)} club teams")
     result = find_team_by_name(team_name, teams)
 
     if result:
         TEAM_CACHE[key] = result
+    else:
+        print(f"Club team not found: '{team_name}'")
 
     return result
 
@@ -201,13 +246,18 @@ def find_national_team(team_name: str):
     key = normalize_name(team_name)
 
     if key in NATIONAL_TEAM_CACHE:
+        print(f"Returning cached national team for '{team_name}'")
         return NATIONAL_TEAM_CACHE[key]
 
-    teams = get_all_national_teams()
+    print(f"Searching for national team: '{team_name}'")
+    teams = get_all_national_teams(use_cache=True)
+    print(f"Loaded {len(teams)} national teams")
     result = find_team_by_name(team_name, teams)
 
     if result:
         NATIONAL_TEAM_CACHE[key] = result
+    else:
+        print(f"National team not found: '{team_name}'")
 
     return result
 

@@ -31,6 +31,9 @@ from config import API_KEY, BASE_URL, FAST_COMPETITIONS, COMPETITIONS, CLUB_COMP
 
 import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is not set. Please set it before running the bot.")
+
 MODEL_FILE = "rf_model.pkl"
 OWNER_ID = 6225991784  # Replace with your Telegram user ID for admin access
 VIP_FILE = Path("vip_users.json")
@@ -177,8 +180,13 @@ async def require_vip(message_obj, user_id: int):
     )
     return False
 
-with open(MODEL_FILE, "rb") as f:
-    model = pickle.load(f)
+try:
+    with open(MODEL_FILE, "rb") as f:
+        model = pickle.load(f)
+except FileNotFoundError:
+    raise FileNotFoundError(f"Model file '{MODEL_FILE}' not found. Please train the model first using train_rf.py")
+except Exception as e:
+    raise Exception(f"Error loading model: {e}")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -207,6 +215,41 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• France vs Brazil",
         reply_markup=main_menu_keyboard()
     )
+
+async def debug_teams(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Debug command to check available teams"""
+    user_id = update.effective_user.id
+    
+    # Only allow owner
+    if user_id != OWNER_ID:
+        await update.message.reply_text("❌ Admin only")
+        return
+    
+    try:
+        from football_api import get_all_club_teams, get_all_national_teams
+        
+        await update.message.reply_text("⏳ Loading teams...")
+        
+        club_teams = get_all_club_teams(use_cache=False)
+        national_teams = get_all_national_teams(use_cache=False)
+        
+        msg = f"📊 Team Data\n\n"
+        msg += f"Club teams loaded: {len(club_teams)}\n"
+        msg += f"National teams loaded: {len(national_teams)}\n\n"
+        
+        if club_teams:
+            msg += "📋 Sample club teams:\n"
+            for team in club_teams[:5]:
+                msg += f"• {team.get('name')}\n"
+        
+        if national_teams:
+            msg += "\n🌍 National teams:\n"
+            for team in national_teams[:10]:
+                msg += f"• {team.get('name')}\n"
+        
+        await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def send_monthly_vip_invoice(message_obj, context):
     await context.bot.send_invoice(
@@ -607,28 +650,55 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     )
 
     if not home_team or not away_team:
+        missing = []
+        if not home_team:
+            missing.append(home_name)
+        if not away_team:
+            missing.append(away_name)
+        
         await message_obj.reply_text(
-            "Team not found.\n\nTry exact names like:\n"
-            "• Real Madrid CF\n"
+            f"❌ Team not found: {', '.join(missing)}\n\n"
+            "Try these exact formats:\n"
+            "• Real Madrid\n"
+            "• Manchester United\n"
             "• FC Bayern München\n"
+            "• PSG\n"
             "• France\n"
-            "• Brazil",
+            "• Brazil\n\n"
+            "Tip: Use team's short common names.",
             reply_markup=main_menu_keyboard()
         )
         return
 
+    try:
+        home_stats, away_stats, home_form_boost, away_form_boost = await asyncio.gather(
+            async_collect_team_dataset(home_team["id"], recent_limit=5),
+            async_collect_team_dataset(away_team["id"], recent_limit=5),
+            get_team_player_form(home_team["id"]),
+            get_team_player_form(away_team["id"])
+        )
 
-    home_stats, away_stats, home_form_boost, away_form_boost = await asyncio.gather(
-        async_collect_team_dataset(home_team["id"], recent_limit=5),
-        async_collect_team_dataset(away_team["id"], recent_limit=5),
-        get_team_player_form(home_team["id"]),
-        get_team_player_form(away_team["id"])
-    )
-
-    home_players = get_team_players(home_team["id"])
-    away_players = get_team_players(away_team["id"])
-    home_player_impact = calculate_player_impact(home_players)
-    away_player_impact = calculate_player_impact(away_players)
+        home_players = get_team_players(home_team["id"])
+        away_players = get_team_players(away_team["id"])
+        home_player_impact = calculate_player_impact(home_players)
+        away_player_impact = calculate_player_impact(away_players)
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error fetching data: {error_msg}")
+        if "402" in error_msg:
+            await message_obj.reply_text(
+                "❌ API Error: Invalid API key or account issue.\n\n"
+                "Please check:\n"
+                "1. API_KEY environment variable is set\n"
+                "2. Your API account has active credits",
+                reply_markup=main_menu_keyboard()
+            )
+        else:
+            await message_obj.reply_text(
+                f"❌ Error analyzing match: {error_msg}\n\nPlease try again later.",
+                reply_markup=main_menu_keyboard()
+            )
+        return
 
     if home_stats is None:
         await message_obj.reply_text(
@@ -765,6 +835,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_status))
     app.add_handler(CommandHandler("today", today_matches))
     app.add_handler(CommandHandler("tomorrow", tomorrow_matches))
+    app.add_handler(CommandHandler("debug", debug_teams))
     app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(CallbackQueryHandler(handle_button))
