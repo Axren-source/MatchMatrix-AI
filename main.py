@@ -29,6 +29,7 @@ from football_api import (
     async_collect_team_dataset,
     compute_team_stats,
 )
+from analyzer import calculate_win_chances
 from config import API_KEY, BASE_URL, FAST_COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
 
 import os
@@ -326,28 +327,36 @@ async def vip_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_scheduled_matches_by_date(date_from, date_to, competition_codes=None):
     all_matches = []
 
-    matches = await async_get_scheduled_matches_from_competition(None, date_from=date_from, date_to=date_to)
-    if isinstance(matches, Exception):
-        print(f"Error fetching matches: {matches}")
-        return all_matches
+    try:
+        matches = await async_get_scheduled_matches_from_competition(None, date_from=date_from, date_to=date_to)
+        
+        if not matches or isinstance(matches, Exception):
+            print(f"⚠️ No matches found for {date_from} to {date_to}")
+            return all_matches
 
-    for m in matches:
-        home = m.get("match_hometeam_name") or m.get("homeTeam", {}).get("name")
-        away = m.get("match_awayteam_name") or m.get("awayTeam", {}).get("name")
-        utc_date = None
-        if m.get("match_date") and m.get("match_time"):
-            utc_date = f"{m.get('match_date')}T{m.get('match_time')}Z"
-        else:
-            utc_date = m.get("match_date") or m.get("utcDate")
-        competition_name = m.get("league_name") or "Unknown"
+        print(f"✅ Found {len(matches)} matches")
+        
+        for m in matches:
+            try:
+                # Handle both camelCase (API v4) field names
+                home = m.get("homeTeam", {}).get("name")
+                away = m.get("awayTeam", {}).get("name")
+                utc_date = m.get("utcDate")
+                competition_name = m.get("competition", {}).get("name", "Unknown")
 
-        all_matches.append({
-            "home": home,
-            "away": away,
-            "utcDate": utc_date,
-            "competition": competition_name
-        })
-
+                if home and away:
+                    all_matches.append({
+                        "home": home,
+                        "away": away,
+                        "utcDate": utc_date,
+                        "competition": competition_name
+                    })
+            except Exception as e:
+                print(f"Error parsing match: {e}")
+                continue
+    except Exception as e:
+        print(f"Error fetching matches: {e}")
+    
     return all_matches
 
 def calculate_player_impact(players):
@@ -713,11 +722,16 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         away_player_impact
     )
 
-    probs = model.predict_proba(X)[0]
-
-    away_win = probs[0] * 100
-    draw = probs[1] * 100
-    home_win = probs[2] * 100
+    # 🔥 AI MODEL - with fallback if model prediction fails
+    try:
+        probs = model.predict_proba(X)[0]
+        away_win = probs[0] * 100
+        draw = probs[1] * 100
+        home_win = probs[2] * 100
+    except Exception as e:
+        print(f"⚠️ Model prediction failed: {e}. Using statistical analysis instead.")
+        # Fallback to pure statistical analysis
+        home_win, draw, away_win = calculate_win_chances(home_stats, away_stats)
 
     # 🔥 SCORE PREDICTION
     main_score, alt_scores, xg_home, xg_away = predict_scorelines(
