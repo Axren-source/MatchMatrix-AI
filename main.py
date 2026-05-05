@@ -20,6 +20,8 @@ from telegram.ext import (
     filters,
 )
 
+import hashlib
+
 from football_api import (
     api_get,
     async_api_get,
@@ -42,7 +44,15 @@ OWNER_ID = 6225991784  # Replace with your Telegram user ID for admin access
 VIP_FILE = Path("vip_users.json")
 VIP_PRICE_STARS = 300
 
-        
+MATCH_BUTTON_CACHE = {}
+
+
+def make_match_callback(match_text: str) -> str:
+    key = f"match:{hashlib.sha1(match_text.encode('utf-8')).hexdigest()[:16]}"
+    MATCH_BUTTON_CACHE[key] = match_text
+    return key
+
+
 def parse_match(text):
     for sep in [" vs ", " VS ", " Vs ", " v ", " - "]:
         if sep in text:
@@ -421,7 +431,8 @@ async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for m in matches[:15]:
         if m.get('home') and m.get('away'):
             text = f"{m['home']} vs {m['away']}"
-            keyboard.append([InlineKeyboardButton(text, callback_data=text)])
+            callback_data = make_match_callback(text)
+            keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
     if not keyboard:
         await update.message.reply_text("❌ Could not parse match data.")
@@ -462,7 +473,8 @@ async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for m in matches[:15]:
         if m.get('home') and m.get('away'):
             text = f"{m['home']} vs {m['away']}"
-            keyboard.append([InlineKeyboardButton(text, callback_data=text)])
+            callback_data = make_match_callback(text)
+            keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
     if not keyboard:
         await update.message.reply_text("❌ Could not parse match data.")
@@ -518,13 +530,20 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "vip_monthly":
         await send_monthly_vip_invoice(query.message, context)
 
-    elif " vs " in query.data:
-        match_text = query.data
+    elif query.data.startswith("match:"):
+        match_text = MATCH_BUTTON_CACHE.get(query.data)
+        if not match_text:
+            await query.message.reply_text(
+                "❌ Match button expired. Send the match manually with text like:\n"
+                "Arsenal vs Atletico"
+            )
+            return
+
         await process_match_request(
-           query.message,
-           context,
-           match_text,
-           update.effective_user.id
+            query.message,
+            context,
+            match_text,
+            update.effective_user.id
         )
 
 async def get_team_player_form(team_id):
