@@ -1,6 +1,45 @@
-# ==================== TEAMS DATABASE & SEARCH ====================
-import os
+import requests
+import aiohttp
+import asyncio
+import time
+from config import API_KEY, BASE_URL
 import json
+import os
+
+# These two functions MUST be defined for the rest of the file to work
+
+def api_get(endpoint, params=None):
+    """Synchronous GET request for database building"""
+    url = f"{BASE_URL}{endpoint.lstrip('/')}"
+    headers = {"X-Auth-Token": API_KEY}
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        if response.status_code == 429:
+            print("⚠️ Rate limit hit. Waiting 60s...")
+            time.sleep(60)
+            return api_get(endpoint, params)
+        return response.json() if response.status_code == 200 else None
+    except Exception as e:
+        print(f"❌ Request failed: {e}")
+        return None
+
+async def async_api_get(endpoint, params=None, retries=3):
+    """Asynchronous GET request for the Telegram bot"""
+    url = f"{BASE_URL}{endpoint.lstrip('/')}"
+    headers = {"X-Auth-Token": API_KEY}
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for attempt in range(retries):
+            try:
+                async with session.get(url, params=params, timeout=20) as response:
+                    if response.status == 429:
+                        await asyncio.sleep(60)
+                        continue
+                    return await response.json() if response.status == 200 else None
+            except Exception:
+                await asyncio.sleep(2)
+    return None
 
 TEAMS_DB_FILE = "teams_database.json"
 TEAMS_DB_CACHE = None
@@ -8,6 +47,28 @@ TEAMS_DB_CACHE = None
 def normalize_name(name: str) -> str:
     """Standardize names for comparison"""
     return " ".join(name.lower().strip().split())
+
+def get_scheduled_matches_from_competition(code: str):
+    """
+    Fetches all upcoming matches for a specific league (e.g., 'PL', 'PD').
+    Uses the football-data.org status filter to only get 'SCHEDULED' games.
+    """
+    # Endpoint: /v4/competitions/{code}/matches?status=SCHEDULED
+    params = {"status": "SCHEDULED"}
+    data = api_get(f"competitions/{code}/matches", params=params)
+    
+    if data and "matches" in data:
+        return data["matches"]
+    return []
+
+async def async_get_scheduled_matches_from_competition(code: str):
+    """Async version for the Telegram bot's real-time updates[cite: 1, 3]"""
+    params = {"status": "SCHEDULED"}
+    data = await async_api_get(f"competitions/{code}/matches", params=params)
+    
+    if data and "matches" in data:
+        return data["matches"]
+    return []
 
 def load_teams_database():
     """Load the teams database from the local JSON file[cite: 1, 2]"""
