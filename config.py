@@ -4,6 +4,13 @@ import aiohttp
 API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://v3.football.api-sports.io"
 
+HEADERS = {
+    "x-apisports-key": API_KEY
+}
+
+API_KEY = os.getenv("API_KEY")
+BASE_URL = "https://v3.football.api-sports.io"
+
 # ✅ USE REAL LEAGUE IDS
 COMPETITIONS = {
     1: "FIFA World Cup",

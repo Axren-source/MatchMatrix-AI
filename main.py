@@ -1,9 +1,12 @@
 import pickle
+import aiohttp
+from matplotlib import lines
 import pandas as pd
 import asyncio
 import json
 
 from pathlib import Path
+import requests
 from telegram import LabeledPrice
 from telegram.ext import PreCheckoutQueryHandler
 from datetime import datetime, timedelta, UTC
@@ -19,13 +22,14 @@ from telegram.ext import (
 )
 
 from football_api import (
+    HEADERS,
     find_national_team,
     find_club_team,
     get_scheduled_matches_from_competition,
     async_collect_team_dataset,
     async_get_scheduled_matches_from_competition,
 )
-from config import FAST_COMPETITIONS, COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
+from config import API_KEY, BASE_URL, FAST_COMPETITIONS, COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
 
 import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -34,7 +38,7 @@ OWNER_ID = 6225991784  # Replace with your Telegram user ID for admin access
 VIP_FILE = Path("vip_users.json")
 VIP_PRICE_STARS = 300
 
-
+        
 def parse_match(text):
     for sep in [" vs ", " VS ", " Vs ", " v ", " - "]:
         if sep in text:
@@ -52,7 +56,7 @@ def convert_utc_to_local(utc_string, offset_hours=7):
         return utc_string, ""
 
 
-def build_feature_vector(home_stats, away_stats, is_international):
+def build_feature_vector(home_stats, away_stats, is_international, home_player_impact, away_player_impact):
     data = {
         "home_form": [home_stats["form_points"]],
         "away_form": [away_stats["form_points"]],
@@ -69,6 +73,10 @@ def build_feature_vector(home_stats, away_stats, is_international):
         "home_failed_to_score_rate": [home_stats["failed_to_score_rate"]],
         "away_failed_to_score_rate": [away_stats["failed_to_score_rate"]],
         "is_international": [is_international],
+        "home_player_attack": [home_player_impact["attack"]],
+        "away_player_attack": [away_player_impact["attack"]],
+        "home_player_defense": [home_player_impact["defense"]],
+        "away_player_defense": [away_player_impact["defense"]],
     }
 
     return pd.DataFrame(data)
@@ -275,6 +283,31 @@ async def get_scheduled_matches_by_date(date_from, date_to, competition_codes):
 
     return all_matches
 
+def calculate_player_impact(players):
+    attack_score = 0
+    defense_score = 0
+
+    for p in players:
+        stats = p.get("statistics", [{}])[0]
+
+        goals = stats.get("goals", {}).get("total", 0) or 0
+        assists = stats.get("goals", {}).get("assists", 0) or 0
+        rating = stats.get("games", {}).get("rating", 0) or 0
+        position = p.get("player", {}).get("position", "")
+
+        # Attack players
+        if position in ["Attacker", "Midfielder"]:
+            attack_score += goals * 0.3 + assists * 0.2 + float(rating) * 0.1
+
+        # Defense players
+        if position in ["Defender", "Goalkeeper"]:
+            defense_score += float(rating) * 0.2
+
+    return {
+        "attack": round(attack_score / 10, 2),
+        "defense": round(defense_score / 10, 2)
+    }
+
 async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not await require_vip(update.message, user_id):
@@ -329,6 +362,17 @@ async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+def get_team_players(team_id):
+    url = f"{BASE_URL}/players"
+    params = {
+        "team": team_id,
+        "season": 2026
+    }
+
+    response = requests.get(url, headers=HEADERS, params=params)
+    data = response.json()
+
+    return data.get("response", [])
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -402,7 +446,7 @@ def clamp_goals(value, min_goals=0, max_goals=4):
     return max(min_goals, min(max_goals, value))
 
 
-def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_win_prob, home_form_boost, away_form_boost):
+def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_win_prob, home_form_boost, away_form_boost, home_player_impact, away_player_impact):
     """
     Better score prediction using both:
     - model probabilities
@@ -431,6 +475,12 @@ def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_wi
 
     xg_home -= away_form_boost["defense_boost"]
     xg_away -= home_form_boost["defense_boost"]
+
+    xg_home += home_player_impact["attack"] * 0.3
+    xg_away += away_player_impact["attack"] * 0.3
+
+    xg_home -= away_player_impact["defense"] * 0.2
+    xg_away -= home_player_impact["defense"] * 0.2
 
     # Slight adjustment from match outcome probabilities
     prob_diff = home_win_prob - away_win_prob
@@ -571,11 +621,16 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
 
 
     home_stats, away_stats, home_form_boost, away_form_boost = await asyncio.gather(
-      async_collect_team_dataset(home_team["id"], recent_limit=5),
-      async_collect_team_dataset(away_team["id"], recent_limit=5),
-      get_team_player_form(home_team["id"]),
-      get_team_player_form(away_team["id"]),
+        async_collect_team_dataset(home_team["id"], recent_limit=5),
+        async_collect_team_dataset(away_team["id"], recent_limit=5),
+        get_team_player_form(home_team["id"]),
+        get_team_player_form(away_team["id"])
     )
+
+    home_players = get_team_players(home_team["id"])
+    away_players = get_team_players(away_team["id"])
+    home_player_impact = calculate_player_impact(home_players)
+    away_player_impact = calculate_player_impact(away_players)
 
     if home_stats is None:
         await message_obj.reply_text(
@@ -591,7 +646,7 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         )
         return
 
-    X = build_feature_vector(home_stats, away_stats, is_international)
+    X = build_feature_vector(home_stats, away_stats, is_international, home_player_impact, away_player_impact)
     probs = model.predict_proba(X)[0]
 
     away_win = probs[0] * 100
@@ -609,7 +664,9 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         draw,
         away_win,
         home_form_boost,
-        away_form_boost
+        away_form_boost,
+        home_player_impact,
+        away_player_impact
     )
 
     if home_win > draw and home_win > away_win:
@@ -658,6 +715,12 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     lines.append(f"{home_team['name']}: {home_win:.1f}%")
     lines.append(f"Draw: {draw:.1f}%")
     lines.append(f"{away_team['name']}: {away_win:.1f}%")
+    lines.append("")
+    lines.append("🧍 Player Analysis")
+    lines.append(f"{home_team['name']} attack: {home_player_impact['attack']}")
+    lines.append(f"{away_team['name']} attack: {away_player_impact['attack']}")
+    lines.append(f"{home_team['name']} defense: {home_player_impact['defense']}")
+    lines.append(f"{away_team['name']} defense: {away_player_impact['defense']}")
     lines.append("")
     lines.append("⚽ Score Prediction")
     lines.append(f"Most likely score: {main_score}")
