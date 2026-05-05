@@ -8,24 +8,37 @@ import aiohttp
 from config import (
     API_KEY,
     BASE_URL,
-    HEADERS,
     COMPETITIONS,
     CLUB_COMPETITIONS,
     INTERNATIONAL_COMPETITIONS,
 )
 
 session = requests.Session()
-session.headers.update(HEADERS)
-
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 
+def build_api_params(params=None):
+    params = dict(params or {})
+    params["APIkey"] = API_KEY
+    return params
+
+
+def normalize_api_response(data):
+    if isinstance(data, dict):
+        if "response" in data and isinstance(data["response"], (list, dict)):
+            return data["response"]
+        if "result" in data and isinstance(data["result"], (list, dict)):
+            return data["result"]
+        return data
+    return data
+
+
 async def async_api_get(url, params=None, retries=5):
     wait_time = 8
-    headers = HEADERS.copy()
+    params = build_api_params(params)
 
-    async with aiohttp.ClientSession(headers=headers) as session:
+    async with aiohttp.ClientSession() as session:
         for attempt in range(retries):
             try:
                 async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
@@ -34,15 +47,15 @@ async def async_api_get(url, params=None, retries=5):
                         await asyncio.sleep(wait_time)
                         wait_time *= 2
                         continue
-                    
+
                     if response.status != 200:
                         text = await response.text()
                         print(f"API Error {response.status}: {text}")
                         if response.status == 402:
                             raise Exception("API Error 402: Forbidden. Check your API key or account permissions.")
                         response.raise_for_status()
-                    
-                    return await response.json()
+
+                    return normalize_api_response(await response.json())
             except aiohttp.ClientError as e:
                 if attempt == retries - 1:
                     raise e
@@ -55,6 +68,7 @@ async def async_api_get(url, params=None, retries=5):
 
 def api_get(url, params=None, retries=5):
     wait_time = 8
+    params = build_api_params(params)
 
     for attempt in range(retries):
         response = session.get(url, params=params, timeout=30)
@@ -70,8 +84,8 @@ def api_get(url, params=None, retries=5):
             if response.status_code == 402:
                 raise Exception("API Error 402: Forbidden. Check your API key or account permissions.")
             response.raise_for_status()
-        
-        return response.json()
+
+        return normalize_api_response(response.json())
 
     raise Exception("Too many requests. Please wait and try again.")
 
@@ -177,18 +191,20 @@ def get_teams_from_competition(code: str, use_cache=True):
         if cached is not None:
             return cached
 
-    url = f"{BASE_URL}/competitions/{code}/teams"
+    params = {
+        "action": "get_teams",
+        "league_id": code
+    }
+
     try:
-        data = api_get(url)
-        # Football-api returns teams under 'response' key
-        teams = data.get("response", [])
+        data = api_get(BASE_URL, params=params)
+        teams = data if isinstance(data, list) else []
         if not teams:
             print(f"Warning: No teams found for competition {code}. API response: {data}")
         save_cache(cache_name, teams)
         return teams
     except Exception as e:
         print(f"Error fetching teams for competition {code}: {e}")
-        # Try to return cached data even if expired
         cached = load_cache(cache_name)
         if cached:
             return cached
@@ -203,7 +219,10 @@ def get_all_teams_from_competitions(codes, use_cache=True):
         try:
             teams = get_teams_from_competition(code, use_cache=use_cache)
             for team in teams:
-                team_id = team["id"]
+                team_id = team.get("team_key") or team.get("team_id") or team.get("id")
+
+                if not team_id:
+                    continue
 
                 if team_id not in all_teams:
                     all_teams[team_id] = team
@@ -246,8 +265,11 @@ def find_team_by_name(team_name: str, teams):
     for team in teams:
         possible_names = [
             team.get("name", ""),
+            team.get("team_name", ""),
             team.get("shortName", ""),
-            team.get("tla", "")
+            team.get("team_short_name", ""),
+            team.get("tla", ""),
+            team.get("team_alternate_name", ""),
         ]
 
         lowered = [normalize_name(name) for name in possible_names if name]
@@ -352,17 +374,39 @@ async def async_get_recent_team_matches(team_id: int, limit: int = 10, use_cache
         if cached is not None:
             return cached
 
-    url = f"{BASE_URL}/teams/{team_id}/matches"
+    today = __import__("datetime").datetime.utcnow().date()
+    from_date = (today - __import__("datetime").timedelta(days=120)).isoformat()
+    to_date = today.isoformat()
+
     params = {
-        "status": "FINISHED",
-        "limit": limit
+        "action": "get_events",
+        "team_id": team_id,
+        "from": from_date,
+        "to": to_date
     }
 
-    data = await async_api_get(url, params=params)
-    matches = data.get("matches", [])
+    data = await async_api_get(BASE_URL, params=params)
+    matches = data if isinstance(data, list) else []
 
-    save_cache(cache_name, matches)
-    return matches
+    # Filter to finished matches and keep most recent first
+    filtered = []
+    for match in matches:
+        status = str(match.get("match_status", "")).lower()
+        if status in ["finished", "ft", "full time", "completed"]:
+            filtered.append(match)
+
+    def sort_key(match):
+        dt = match.get("match_date")
+        if match.get("match_time"):
+            dt = f"{dt} {match.get('match_time')}"
+        return dt or ""
+
+    filtered.sort(key=sort_key, reverse=True)
+    result = filtered[:limit]
+
+    if use_cache:
+        save_cache(cache_name, result)
+    return result
 
 
 async def async_collect_team_dataset(team_id: int, recent_limit: int = 20):
@@ -380,16 +424,15 @@ async def async_collect_team_dataset(team_id: int, recent_limit: int = 20):
     failed_to_score = 0
     match_count = 0
 
-    for match in matches:
-        full_time = match.get("score", {}).get("fullTime", {})
-        home_goals = full_time.get("home")
-        away_goals = full_time.get("away")
-
-        if home_goals is None or away_goals is None:
+    for match in matches[:recent_limit]:
+        try:
+            home_goals = int(match.get("match_hometeam_score") or 0)
+            away_goals = int(match.get("match_awayteam_score") or 0)
+        except (TypeError, ValueError):
             continue
 
-        home_id = match.get("homeTeam", {}).get("id")
-        away_id = match.get("awayTeam", {}).get("id")
+        home_id = match.get("match_hometeam_id")
+        away_id = match.get("match_awayteam_id")
 
         if team_id == home_id:
             team_goals = home_goals
@@ -437,7 +480,6 @@ async def async_collect_team_dataset(team_id: int, recent_limit: int = 20):
 def get_matches_from_competition(code: str, season=None, use_cache=True):
     """
     Get all finished matches from a competition.
-    Some competitions do not support every season year.
     """
     cache_name = f"competition_matches_{code}_{season if season else 'current'}.json"
 
@@ -446,21 +488,13 @@ def get_matches_from_competition(code: str, season=None, use_cache=True):
         if cached is not None:
             return cached
 
-    url = f"{BASE_URL}/competitions/{code}/matches"
     params = {
-        "status": "FINISHED"
+        "action": "get_events",
+        "league_id": code,
     }
 
-    # Only apply season to league/club competitions
-    if season is not None and code not in ["WC", "EC"]:
-        params["season"] = season
-
-    try:
-        data = api_get(url, params=params)
-        matches = data.get("matches", [])
-    except requests.exceptions.HTTPError as e:
-        print(f"Skipping {code}: {e}")
-        return []
+    data = api_get(BASE_URL, params=params)
+    matches = data if isinstance(data, list) else []
 
     save_cache(cache_name, matches)
     return matches
@@ -554,31 +588,38 @@ def get_team_stats_before_match(team_id: int, all_matches: list, match_date: str
         "failed_to_score_rate": failed_to_score_rate,
     }
 
-async def async_get_scheduled_matches_from_competition(code: str, date_from=None, date_to=None, use_cache=True):
-    cache_name = f"scheduled_{code}_{date_from or 'none'}_{date_to or 'none'}.json"
+async def async_get_scheduled_matches_from_competition(code: str = None, date_from=None, date_to=None, use_cache=True):
+    cache_key = code if code is not None else "all"
+    cache_name = f"scheduled_{cache_key}_{date_from or 'none'}_{date_to or 'none'}.json"
 
     if use_cache:
         cached = load_cache(cache_name)
         if cached is not None:
             return cached
 
-    url = f"{BASE_URL}/competitions/{code}/matches"
     params = {
-        "status": "SCHEDULED"
+        "action": "get_events"
     }
-
+    if code is not None:
+        params["league_id"] = code
     if date_from:
-        params["dateFrom"] = date_from
+        params["from"] = date_from
     if date_to:
-        params["dateTo"] = date_to
+        params["to"] = date_to
 
-    data = await async_api_get(url, params=params)
-    matches = data.get("matches", [])
+    data = await async_api_get(BASE_URL, params=params)
+    matches = data if isinstance(data, list) else []
+
+    filtered = []
+    for match in matches:
+        status = str(match.get("match_status", "")).lower()
+        if status in ["not started", "ns", "scheduled", "to be played"] or not status:
+            filtered.append(match)
 
     if use_cache:
-        save_cache(cache_name, matches)
+        save_cache(cache_name, filtered)
 
-    return matches
+    return filtered
 
 def find_scheduled_match(home_name: str, away_name: str, competition_codes, date_from=None, date_to=None):
     home_name = home_name.lower().strip()
@@ -589,8 +630,8 @@ def find_scheduled_match(home_name: str, away_name: str, competition_codes, date
             matches = get_scheduled_matches_from_competition(code, date_from=date_from, date_to=date_to)
 
             for match in matches:
-                home = match.get("homeTeam", {}).get("name", "").lower()
-                away = match.get("awayTeam", {}).get("name", "").lower()
+                home = match.get("match_hometeam_name", "").lower() or match.get("homeTeam", {}).get("name", "").lower()
+                away = match.get("match_awayteam_name", "").lower() or match.get("awayTeam", {}).get("name", "").lower()
 
                 if home_name in home and away_name in away:
                     return match
@@ -612,29 +653,38 @@ def team_name_matches(query: str, actual: str) -> bool:
     return normalized_query in normalized_actual or normalized_actual in normalized_query
 
 
-def get_scheduled_matches_from_competition(code: str, date_from=None, date_to=None, use_cache=True):
-    cache_name = f"scheduled_{code}_{date_from}_{date_to}.json"
+def get_scheduled_matches_from_competition(code: str = None, date_from=None, date_to=None, use_cache=True):
+    cache_key = code if code is not None else "all"
+    cache_name = f"scheduled_{cache_key}_{date_from}_{date_to}.json"
 
     if use_cache:
         cached = load_cache(cache_name)
         if cached is not None:
             return cached
 
-    url = f"{BASE_URL}/competitions/{code}/matches"
-    params = {"status": "SCHEDULED"}
-
+    params = {
+        "action": "get_events"
+    }
+    if code is not None:
+        params["league_id"] = code
     if date_from:
-        params["dateFrom"] = date_from
+        params["from"] = date_from
     if date_to:
-        params["dateTo"] = date_to
+        params["to"] = date_to
 
-    data = api_get(url, params=params)
-    matches = data.get("matches", [])
+    data = api_get(BASE_URL, params=params)
+    matches = data if isinstance(data, list) else []
+
+    filtered = []
+    for match in matches:
+        status = str(match.get("match_status", "")).lower()
+        if status in ["not started", "ns", "scheduled", "to be played"] or not status:
+            filtered.append(match)
 
     if use_cache:
-        save_cache(cache_name, matches)
+        save_cache(cache_name, filtered)
 
-    return matches
+    return filtered
 
 def find_scheduled_fixture(home_name: str, away_name: str, competition_codes, date_from=None, date_to=None):
     """
@@ -650,8 +700,8 @@ def find_scheduled_fixture(home_name: str, away_name: str, competition_codes, da
             )
 
             for match in matches:
-                match_home = match.get("homeTeam", {}).get("name", "")
-                match_away = match.get("awayTeam", {}).get("name", "")
+                match_home = match.get("match_hometeam_name", "") or match.get("homeTeam", {}).get("name", "")
+                match_away = match.get("match_awayteam_name", "") or match.get("awayTeam", {}).get("name", "")
 
                 direct_match = (
                     team_name_matches(home_name, match_home)

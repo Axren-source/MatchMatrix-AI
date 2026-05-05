@@ -21,7 +21,6 @@ from telegram.ext import (
 )
 
 from football_api import (
-    HEADERS,
     find_national_team,
     find_club_team,
     get_scheduled_matches_from_competition,
@@ -335,23 +334,30 @@ async def vip_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_menu_keyboard()
         )
 
-async def get_scheduled_matches_by_date(date_from, date_to, competition_codes):
+async def get_scheduled_matches_by_date(date_from, date_to, competition_codes=None):
     all_matches = []
 
-    tasks = [async_get_scheduled_matches_from_competition(code, date_from=date_from, date_to=date_to) for code in competition_codes]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    matches = await async_get_scheduled_matches_from_competition(None, date_from=date_from, date_to=date_to)
+    if isinstance(matches, Exception):
+        print(f"Error fetching matches: {matches}")
+        return all_matches
 
-    for code, matches in zip(competition_codes, results):
-        if isinstance(matches, Exception):
-            print(f"Error fetching matches for {code}: {matches}")
-            continue
-        for m in matches:
-            all_matches.append({
-                "home": m["homeTeam"]["name"],
-                "away": m["awayTeam"]["name"],
-                "utcDate": m["utcDate"],
-                "competition": COMPETITIONS.get(code, code)
-            })
+    for m in matches:
+        home = m.get("match_hometeam_name") or m.get("homeTeam", {}).get("name")
+        away = m.get("match_awayteam_name") or m.get("awayTeam", {}).get("name")
+        utc_date = None
+        if m.get("match_date") and m.get("match_time"):
+            utc_date = f"{m.get('match_date')}T{m.get('match_time')}Z"
+        else:
+            utc_date = m.get("match_date") or m.get("utcDate")
+        competition_name = m.get("league_name") or "Unknown"
+
+        all_matches.append({
+            "home": home,
+            "away": away,
+            "utcDate": utc_date,
+            "competition": competition_name
+        })
 
     return all_matches
 
@@ -360,20 +366,16 @@ def calculate_player_impact(players):
     defense_score = 0
 
     for p in players:
-        stats = p.get("statistics", [{}])[0]
+        goals = float(p.get("player_goals") or p.get("goals") or 0)
+        assists = float(p.get("player_assists") or p.get("assists") or 0)
+        rating = float(p.get("player_rating") or p.get("rating") or 0)
+        position = str(p.get("player_type") or p.get("position") or p.get("player_position") or "").lower()
 
-        goals = stats.get("goals", {}).get("total", 0) or 0
-        assists = stats.get("goals", {}).get("assists", 0) or 0
-        rating = stats.get("games", {}).get("rating", 0) or 0
-        position = p.get("player", {}).get("position", "")
+        if "att" in position or "mid" in position:
+            attack_score += goals * 0.3 + assists * 0.2 + rating * 0.1
 
-        # Attack players
-        if position in ["Attacker", "Midfielder"]:
-            attack_score += goals * 0.3 + assists * 0.2 + float(rating) * 0.1
-
-        # Defense players
-        if position in ["Defender", "Goalkeeper"]:
-            defense_score += float(rating) * 0.2
+        if "def" in position or "goal" in position:
+            defense_score += rating * 0.2
 
     return {
         "attack": round(attack_score / 10, 2),
@@ -435,16 +437,22 @@ async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def get_team_players(team_id):
-    url = f"{BASE_URL}/players"
+    url = BASE_URL
     params = {
-        "team": team_id,
-        "season": 2026
+        "action": "get_teams",
+        "team_id": team_id,
+        "APIkey": API_KEY,
     }
 
-    response = requests.get(url, headers=HEADERS, params=params)
+    response = requests.get(url, params=params, timeout=30)
+    response.raise_for_status()
     data = response.json()
 
-    return data.get("response", [])
+    if isinstance(data, list) and data:
+        return data[0].get("players", [])
+    if isinstance(data, dict):
+        return data.get("players", []) or data.get("response", []) or data.get("result", [])
+    return []
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()

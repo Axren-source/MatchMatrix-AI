@@ -6,97 +6,112 @@ This creates a JSON file with all available teams globally
 import json
 import requests
 import os
-from pathlib import Path
-from config import API_KEY, BASE_URL, HEADERS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS, COMPETITIONS
+from datetime import datetime, timezone
+
+from config import API_KEY, BASE_URL
 
 TEAMS_DB_FILE = "teams_database.json"
 
+
+def build_api_params(params=None):
+    params = dict(params or {})
+    params["action"] = params.get("action", "get_leagues")
+    params["APIkey"] = API_KEY
+    return params
+
+
+def get_leagues():
+    url = BASE_URL
+    params = build_api_params({"action": "get_leagues"})
+    response = requests.get(url, params=params, timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_teams_by_league(league_id):
+    url = BASE_URL
+    params = build_api_params({"action": "get_teams", "league_id": league_id})
+    response = requests.get(url, params=params, timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
 def build_teams_database():
-    """Fetch all teams from all competitions and store in a single database"""
     print(f"🔄 Building teams database from {BASE_URL}...")
-    
+
     all_teams = {}
-    all_competitions = list(set(CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS))
-    
-    for competition_code in all_competitions:
-        competition_name = COMPETITIONS.get(competition_code, f"Competition {competition_code}")
-        print(f"\n  📥 Fetching teams from {competition_name} (ID: {competition_code})...")
-        
+    leagues = get_leagues()
+
+    if not leagues:
+        raise RuntimeError("No leagues returned from API.")
+
+    print(f"📥 Found {len(leagues)} leagues")
+
+    for league in leagues:
+        league_id = league.get("league_id")
+        league_name = league.get("league_name") or league.get("name") or f"League {league_id}"
+        country = league.get("country_name") or league.get("country")
+
+        if not league_id:
+            continue
+
+        print(f"\n  📥 Fetching teams from {league_name} (ID: {league_id})...")
         try:
-            url = f"{BASE_URL}/competitions/{competition_code}/teams"
-            response = requests.get(url, headers=HEADERS, timeout=30)
-            
-            if response.status_code == 429:
-                print(f"  ⚠️  Rate limit hit. Waiting...")
-                import time
-                time.sleep(10)
-                response = requests.get(url, headers=HEADERS, timeout=30)
-            
-            if response.status_code != 200:
-                print(f"  ❌ Error {response.status_code}: {response.text}")
-                continue
-            
-            data = response.json()
-            teams = data.get("response", [])
-            
+            teams = get_teams_by_league(league_id)
             if not teams:
-                print(f"  ⚠️  No teams found for {competition_name}")
+                print(f"  ⚠️  No teams found for {league_name}")
                 continue
-            
+
             print(f"  ✅ Found {len(teams)} teams")
-            
             for team in teams:
-                team_id = team.get("id")
+                team_id = team.get("team_key") or team.get("team_id")
                 if not team_id:
                     continue
-                
-                team_name = team.get("name", "Unknown")
-                
+
                 if team_id not in all_teams:
                     all_teams[team_id] = {
                         "id": team_id,
-                        "name": team_name,
-                        "shortName": team.get("shortName", ""),
-                        "tla": team.get("tla", ""),
-                        "country": team.get("country", ""),
-                        "founded": team.get("founded"),
+                        "name": team.get("team_name") or team.get("name") or "Unknown",
+                        "shortName": team.get("team_short_name") or team.get("short_code") or "",
+                        "tla": team.get("team_name") or "",
+                        "country": team.get("team_country") or country or "",
+                        "founded": team.get("team_founded") or team.get("founded"),
                         "competitions": []
                     }
-                
-                # Add competition if not already there
-                if competition_code not in all_teams[team_id]["competitions"]:
-                    all_teams[team_id]["competitions"].append({
-                        "code": competition_code,
-                        "name": competition_name
-                    })
-        
+
+                competition_entry = {
+                    "id": league_id,
+                    "name": league_name,
+                    "country": country,
+                }
+                if competition_entry not in all_teams[team_id]["competitions"]:
+                    all_teams[team_id]["competitions"].append(competition_entry)
+
+        except requests.exceptions.HTTPError as e:
+            print(f"  ❌ HTTP error fetching {league_name}: {e}")
         except Exception as e:
-            print(f"  ❌ Error fetching {competition_name}: {e}")
-    
-    # Convert to list for easier searching
+            print(f"  ❌ Error fetching {league_name}: {e}")
+
     teams_list = list(all_teams.values())
-    
     print(f"\n\n{'='*60}")
     print(f"✨ DATABASE COMPLETE")
     print(f"{'='*60}")
     print(f"Total teams collected: {len(teams_list)}")
-    
-    # Save to file
+
     with open(TEAMS_DB_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "total": len(teams_list),
             "teams": teams_list,
-            "last_updated": __import__("datetime").datetime.now().__import__("datetime").timezone.utc.isoformat()
+            "last_updated": datetime.now(timezone.utc).isoformat()
         }, f, ensure_ascii=False, indent=2)
-    
+
     print(f"💾 Saved to {TEAMS_DB_FILE}")
-    
-    # Show sample
     print(f"\n📋 Sample teams:")
     for team in teams_list[:5]:
         print(f"   - {team['name']} (ID: {team['id']})")
-    
+
     return teams_list
+
 
 if __name__ == "__main__":
     try:
