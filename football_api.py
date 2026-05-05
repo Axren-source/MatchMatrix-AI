@@ -110,7 +110,12 @@ def find_team_by_name(name: str):
 # =========================
 # TEAM STATS ENGINE (🔥 CORE LOGIC)
 # =========================
-def compute_team_stats(matches, team_id):
+def compute_team_stats(matches, team_id=None):
+    """
+    Compute team statistics from matches.
+    If team_id provided, calculates from team perspective (home/away).
+    Otherwise calculates assuming first team in match is home team.
+    """
     if not matches:
         return None
 
@@ -118,47 +123,68 @@ def compute_team_stats(matches, team_id):
     goals_scored = 0
     goals_conceded = 0
     wins = 0
+    draws = 0
+    losses = 0
     clean_sheets = 0
     failed_to_score = 0
 
     total = len(matches)
 
     for m in matches:
-        home_id = m["homeTeam"]["id"]
-        away_id = m["awayTeam"]["id"]
+        try:
+            score = m.get("score", {}).get("fullTime", {})
+            home_goals = score.get("home") or 0
+            away_goals = score.get("away") or 0
+            
+            if home_goals is None or away_goals is None:
+                continue
 
-        home_goals = m["score"]["fullTime"]["home"] or 0
-        away_goals = m["score"]["fullTime"]["away"] or 0
+            # If team_id provided, calculate from team perspective
+            if team_id:
+                home_id = m.get("homeTeam", {}).get("id")
+                away_id = m.get("awayTeam", {}).get("id")
+                
+                if team_id == home_id:
+                    scored = home_goals
+                    conceded = away_goals
+                else:
+                    scored = away_goals
+                    conceded = home_goals
+            else:
+                # Default: treat as home team
+                scored = home_goals
+                conceded = away_goals
 
-        if team_id == home_id:
-            scored = home_goals
-            conceded = away_goals
-        else:
-            scored = away_goals
-            conceded = home_goals
+            goals_scored += scored
+            goals_conceded += conceded
 
-        goals_scored += scored
-        goals_conceded += conceded
+            if scored > conceded:
+                form_points += 3
+                wins += 1
+            elif scored == conceded:
+                form_points += 1
+                draws += 1
+            else:
+                losses += 1
 
-        if scored > conceded:
-            form_points += 3
-            wins += 1
-        elif scored == conceded:
-            form_points += 1
-
-        if conceded == 0:
-            clean_sheets += 1
-        if scored == 0:
-            failed_to_score += 1
+            if conceded == 0:
+                clean_sheets += 1
+            if scored == 0:
+                failed_to_score += 1
+        except Exception:
+            continue
 
     return {
-        "form_points": form_points / total,
-        "goals_scored_avg": goals_scored / total,
-        "goals_conceded_avg": goals_conceded / total,
-        "goal_diff_avg": (goals_scored - goals_conceded) / total,
-        "win_rate": wins / total,
-        "clean_sheet_rate": clean_sheets / total,
-        "failed_to_score_rate": failed_to_score / total
+        "form_points": form_points / total if total > 0 else 0,
+        "goals_scored_avg": goals_scored / total if total > 0 else 0,
+        "goals_conceded_avg": goals_conceded / total if total > 0 else 0,
+        "goal_diff_avg": (goals_scored - goals_conceded) / total if total > 0 else 0,
+        "win_rate": wins / total if total > 0 else 0,
+        "clean_sheet_rate": clean_sheets / total if total > 0 else 0,
+        "failed_to_score_rate": failed_to_score / total if total > 0 else 0,
+        "wins": wins,
+        "draws": draws,
+        "losses": losses
     }
 
 

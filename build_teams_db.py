@@ -1,8 +1,10 @@
 import time
-from football_api import api_get, normalize_team_object, TEAMS_DB_FILE
+from football_api import api_get, normalize_team_object
 from config import CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
 import json
 from datetime import datetime, timezone
+
+TEAMS_DB_FILE = "teams_database.json"
 
 def build_teams_database():
     print("🚀 Building database from football-data.org...")

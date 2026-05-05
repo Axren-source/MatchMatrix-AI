@@ -21,12 +21,13 @@ from telegram.ext import (
 )
 
 from football_api import (
+    api_get,
     async_api_get,
     find_national_team,
     find_club_team,
     async_get_scheduled_matches_from_competition,
     async_collect_team_dataset,
-    async_get_scheduled_matches_from_competition,
+    compute_team_stats,
 )
 from config import API_KEY, BASE_URL, FAST_COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
 
@@ -218,7 +219,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def debug_teams(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Debug command to check available teams"""
+    """Debug command - test team search from API"""
     user_id = update.effective_user.id
     
     # Only allow owner
@@ -227,28 +228,26 @@ async def debug_teams(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        from football_api import load_teams_database, search_teams_database
+        await update.message.reply_text("⏳ Testing API team search...")
         
-        await update.message.reply_text("⏳ Loading teams database...")
+        # Test search for a few known teams
+        test_teams = ["Manchester United", "Barcelona", "France"]
+        results = []
         
-        teams = load_teams_database()
-        if not teams:
-            await update.message.reply_text("❌ Teams database not found!\n\nRun: python build_teams_db.py")
-            return
+        for team_name in test_teams:
+            team = find_club_team(team_name)
+            if team:
+                results.append(f"✅ {team['name']} (ID: {team['id']})")
+            else:
+                results.append(f"❌ {team_name} not found")
         
-        msg = f"📊 Teams Database\n\n"
-        msg += f"✅ Total teams: {len(teams)}\n\n"
-        msg += f"📋 Sample teams:\n"
-        
-        for team in teams[:15]:
-            msg += f"• {team.get('name')}\n"
-        
+        msg = "🔍 API Team Search Test\n\n" + "\n".join(results) + "\n\n✅ API is working!"
         await update.message.reply_text(msg)
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def rebuild_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Rebuild teams database from API"""
+    """Clear API cache to get fresh data"""
     user_id = update.effective_user.id
     
     # Only allow owner
@@ -257,28 +256,17 @@ async def rebuild_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        from football_api import TEAMS_DB_CACHE
+        from football_api import CACHE
         
-        await update.message.reply_text("⏳ Rebuilding teams database...\n\nThis may take a few minutes...")
+        await update.message.reply_text("⏳ Clearing API cache...")
         
         # Clear cache
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, "build_teams_db.py"],
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
+        CACHE.clear()
         
-        if result.returncode == 0:
-            await update.message.reply_text(
-                "✅ Database rebuilt successfully!\n\n"
-                "📊 You can now search for teams."
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Error building database:\n\n{result.stderr}"
-            )
+        await update.message.reply_text(
+            "✅ API cache cleared!\n\n"
+            "📊 Fresh data will be fetched on next request."
+        )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
@@ -366,21 +354,32 @@ def calculate_player_impact(players):
     attack_score = 0
     defense_score = 0
 
+    if not players:
+        return {
+            "attack": 0,
+            "defense": 0
+        }
+
     for p in players:
-        goals = float(p.get("player_goals") or p.get("goals") or 0)
-        assists = float(p.get("player_assists") or p.get("assists") or 0)
-        rating = float(p.get("player_rating") or p.get("rating") or 0)
-        position = str(p.get("player_type") or p.get("position") or p.get("player_position") or "").lower()
+        try:
+            # Handle different field name formats from API
+            goals = float(p.get("goals") or p.get("player_goals") or 0)
+            assists = float(p.get("assists") or p.get("player_assists") or 0)
+            rating = float(p.get("rating") or p.get("player_rating") or 1.0)
+            position = str(p.get("position") or p.get("player_position") or p.get("player_type") or "").lower()
 
-        if "att" in position or "mid" in position:
-            attack_score += goals * 0.3 + assists * 0.2 + rating * 0.1
+            if position and ("att" in position or "mid" in position or "forward" in position or "winger" in position):
+                attack_score += goals * 0.3 + assists * 0.2 + rating * 0.1
 
-        if "def" in position or "goal" in position:
-            defense_score += rating * 0.2
+            if position and ("def" in position or "goal" in position or "keeper" in position or "goalkeeper" in position):
+                defense_score += rating * 0.2
+        except (ValueError, TypeError):
+            continue
 
+    total_players = max(len(players), 1)
     return {
-        "attack": round(attack_score / 10, 2),
-        "defense": round(defense_score / 10, 2)
+        "attack": round(attack_score / max(total_players, 1), 2),
+        "defense": round(defense_score / max(total_players, 1), 2)
     }
 
 async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -438,22 +437,20 @@ async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def get_team_players(team_id):
-    url = BASE_URL
-    params = {
-        "action": "get_teams",
-        "team_id": team_id,
-        "APIkey": API_KEY,
-    }
-
-    response = requests.get(url, params=params, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-
-    if isinstance(data, list) and data:
-        return data[0].get("players", [])
-    if isinstance(data, dict):
-        return data.get("players", []) or data.get("response", []) or data.get("result", [])
-    return []
+    """Fetch team players from API"""
+    try:
+        params = {}
+        data = api_get(f"teams/{team_id}", params)
+        
+        if not data:
+            return []
+        
+        # Extract squad from team data
+        squad = data.get("squad", [])
+        return squad if squad else []
+    except Exception as e:
+        print(f"Error fetching players: {e}")
+        return []
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -495,8 +492,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_team_player_form(team_id):
     try:
-        matches = await async_collect_team_dataset(team_id, limit=5)
-        stats = calculate_team_stats(matches)
+        data = await async_api_get(f"teams/{team_id}/matches", {"status": "FINISHED", "limit": 5})
+        matches = data.get("matches", []) if data else []
+        stats = compute_team_stats(matches, team_id)
 
         if not stats:
             return {"attack_boost": 0, "defense_boost": 0}
@@ -506,7 +504,8 @@ async def get_team_player_form(team_id):
             "defense_boost": min((1.5 - stats["goals_conceded_avg"]) * 0.2, 0.6)
         }
 
-    except Exception:
+    except Exception as e:
+        print(f"Error calculating player form: {e}")
         return {"attack_boost": 0, "defense_boost": 0}
 
 def clamp_goals(value, min_goals=0, max_goals=4):
@@ -656,49 +655,6 @@ def generate_explanation(home_stats, away_stats):
 
     return ", ".join(reasons).capitalize() + "."
 
-def calculate_team_stats(matches):
-    if not matches:
-        return None
-
-    wins = draws = losses = 0
-    goals_for = goals_against = 0
-    clean_sheets = failed_to_score = 0
-
-    for m in matches:
-        score = m.get("score", {}).get("fullTime", {})
-        home = score.get("home", 0)
-        away = score.get("away", 0)
-
-        if home is None or away is None:
-            continue
-
-        goals_for += home
-        goals_against += away
-
-        if home > away:
-            wins += 1
-        elif home == away:
-            draws += 1
-        else:
-            losses += 1
-
-        if away == 0:
-            clean_sheets += 1
-        if home == 0:
-            failed_to_score += 1
-
-    total = max(len(matches), 1)
-
-    return {
-        "form_points": wins * 3 + draws,
-        "goals_scored_avg": goals_for / total,
-        "goals_conceded_avg": goals_against / total,
-        "goal_diff_avg": (goals_for - goals_against) / total,
-        "win_rate": wins / total,
-        "clean_sheet_rate": clean_sheets / total,
-        "failed_to_score_rate": failed_to_score / total
-    }
-
 async def process_match_request(message_obj, context, user_input: str, user_id: int):
     if not await require_vip(message_obj, user_id):
         return
@@ -729,9 +685,9 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     home_matches = home_data.get("matches", []) if home_data else []
     away_matches = away_data.get("matches", []) if away_data else []
 
-    # 🔥 BUILD STATS
-    home_stats = calculate_team_stats(home_matches)
-    away_stats = calculate_team_stats(away_matches)
+    # 🔥 BUILD STATS (using proper team_id to determine home/away perspective)
+    home_stats = compute_team_stats(home_matches, home_team['id'])
+    away_stats = compute_team_stats(away_matches, away_team['id'])
 
     if not home_stats or not away_stats:
         await message_obj.reply_text("❌ Not enough data.")
