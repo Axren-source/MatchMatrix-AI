@@ -74,6 +74,38 @@ async def async_api_get(endpoint, params=None, retries=3):
 
     return None
 
+def score_match(query, team_name):
+    query = query.lower()
+    name = team_name.lower()
+
+    if query == name:
+        return 100
+    if query in name:
+        return 70
+    if name.startswith(query):
+        return 80
+    return 0
+
+def find_team_by_name(name: str):
+    params = {"name": name}
+    data = api_get("teams", params)
+
+    if not data or not data.get("teams"):
+        return None
+
+    teams = data["teams"]
+
+    # 🔥 pick best match instead of first
+    best = max(teams, key=lambda t: score_match(name, t.get("name", "")))
+
+    return {
+        "id": best.get("id"),
+        "name": best.get("name"),
+        "shortName": best.get("shortName"),
+        "tla": best.get("tla"),
+        "country": best.get("area", {}).get("name", ""),
+        "crest": best.get("crest")
+    }
 
 # =========================
 # TEAM STATS ENGINE (🔥 CORE LOGIC)
@@ -200,8 +232,6 @@ async def async_get_scheduled_matches_from_competition(code=None, date_from=None
 # =========================
 # TEAM DATABASE
 # =========================
-TEAMS_DB_FILE = "teams_database.json"
-TEAMS_DB_CACHE = None
 
 
 def normalize_name(name: str):
@@ -218,38 +248,8 @@ def normalize_team_object(team: dict):
         "crest": team.get("crest")
     }
 
-
-def load_teams_database():
-    global TEAMS_DB_CACHE
-
-    if TEAMS_DB_CACHE:
-        return TEAMS_DB_CACHE
-
-    if not os.path.exists(TEAMS_DB_FILE):
-        return []
-
-    with open(TEAMS_DB_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-        TEAMS_DB_CACHE = data.get("teams", [])
-
-    return TEAMS_DB_CACHE
-
-
-def search_teams_database(name: str):
-    teams = load_teams_database()
-    query = normalize_name(name)
-
-    return [
-        t for t in teams
-        if query in normalize_name(t.get("name", ""))
-    ]
-
-
 def find_club_team(name: str):
-    results = search_teams_database(name)
-    return normalize_team_object(results[0]) if results else None
-
+    return find_team_by_name(name)
 
 def find_national_team(name: str):
-    results = search_teams_database(name)
-    return normalize_team_object(results[0]) if results else None
+    return find_team_by_name(name)
