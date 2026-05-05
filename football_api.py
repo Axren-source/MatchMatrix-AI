@@ -112,38 +112,53 @@ def load_teams_database():
         print(f"❌ Error loading teams database: {e}")
         return None
 
-def search_teams_database(search_term: str):
-    """Search for a team in the local database by name, shortName, or TLA[cite: 1]"""
+def search_teams_database(name: str):
+    """Search for teams in the database by name (case-insensitive, partial match)[cite: 1]"""
     teams = load_teams_database()
     if not teams:
         return []
     
-    target = normalize_name(search_term)
+    normalized_query = normalize_name(name)
     results = []
     
     for team in teams:
-        # Check all possible naming fields provided by football-data.org[cite: 1]
-        possible_names = [
-            team.get("name", ""),
-            team.get("shortName", ""),
-            team.get("tla", "")
-        ]
-        
-        lowered = [normalize_name(name) for name in possible_names if name]
-        
-        if target in lowered:
-            results.insert(0, team) # Exact match priority
-        elif any(target in name for name in lowered) or any(name in target for name in lowered):
+        if normalized_query in normalize_name(team.get("name", "")):
             results.append(team)
     
     return results
 
-async def async_get_scheduled_matches_from_competition(code: str):
-    """Async version for the Telegram bot's real-time updates[cite: 1, 3]"""
+def get_scheduled_matches_from_competition(code: str = None, date_from: str = None, date_to: str = None):
+    """
+    Fetches scheduled matches with optional date filtering[cite: 1, 3].
+    If code is None, it fetches matches across all available competitions.
+    """
     params = {"status": "SCHEDULED"}
-    # Use lowercase 'async_api_get' to match your function definition
-    data = await async_api_get(f"competitions/{code}/matches", params=params)
+    if date_from:
+        params["dateFrom"] = date_from # API expects camelCase 'dateFrom'
+    if date_to:
+        params["dateTo"] = date_to
+
+    # Determine endpoint: competition-specific or global matches[cite: 3]
+    endpoint = f"competitions/{code}/matches" if code else "matches"
     
+    data = api_get(endpoint, params=params)
+    if data and "matches" in data:
+        return data["matches"]
+    return []
+
+async def async_get_scheduled_matches_from_competition(code: str = None, date_from: str = None, date_to: str = None):
+    """
+    Async version for the Telegram bot to support date-specific lookups[cite: 1, 3].
+    """
+    params = {"status": "SCHEDULED"}
+    if date_from:
+        params["dateFrom"] = date_from
+    if date_to:
+        params["dateTo"] = date_to
+
+    endpoint = f"competitions/{code}/matches" if code else "matches"
+    
+    data = await async_api_get(endpoint, params=params)
     if data and "matches" in data:
         return data["matches"]
     return []
