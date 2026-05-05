@@ -107,6 +107,64 @@ def clear_cache():
     print("Cache cleared successfully")
 
 
+# ==================== TEAMS DATABASE ====================
+TEAMS_DB_FILE = "teams_database.json"
+TEAMS_DB_CACHE = None
+
+def load_teams_database():
+    """Load the teams database from JSON file"""
+    global TEAMS_DB_CACHE
+    
+    if TEAMS_DB_CACHE is not None:
+        return TEAMS_DB_CACHE
+    
+    if not os.path.exists(TEAMS_DB_FILE):
+        print(f"⚠️  Teams database not found: {TEAMS_DB_FILE}")
+        print("   Run 'python build_teams_db.py' to create it")
+        return None
+    
+    try:
+        with open(TEAMS_DB_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            TEAMS_DB_CACHE = data.get("teams", [])
+            print(f"✅ Loaded {len(TEAMS_DB_CACHE)} teams from database")
+            return TEAMS_DB_CACHE
+    except Exception as e:
+        print(f"❌ Error loading teams database: {e}")
+        return None
+
+
+def search_teams_database(search_term: str):
+    """Search the teams database by name, shortName, or tla"""
+    teams = load_teams_database()
+    if not teams:
+        return []
+    
+    target = normalize_name(search_term)
+    results = []
+    
+    for team in teams:
+        possible_names = [
+            team.get("name", ""),
+            team.get("shortName", ""),
+            team.get("tla", "")
+        ]
+        
+        lowered = [normalize_name(name) for name in possible_names if name]
+        
+        # Exact match
+        if target in lowered:
+            results.insert(0, team)  # Add to front
+        # Partial match
+        elif any(target in name for name in lowered):
+            results.append(team)
+        # Reverse match (team name is substring of search)
+        elif any(name in target for name in lowered):
+            results.append(team)
+    
+    return results
+
+
 def normalize_name(name: str) -> str:
     return " ".join(name.lower().strip().split())
 
@@ -222,42 +280,66 @@ def find_team_by_name(team_name: str, teams):
 TEAM_CACHE = {}
 
 def find_club_team(team_name: str):
+    """Find a club team - tries database first, then API"""
     key = normalize_name(team_name)
 
     if key in TEAM_CACHE:
-        print(f"Returning cached club team for '{team_name}'")
+        print(f"✅ Returning cached club team for '{team_name}'")
         return TEAM_CACHE[key]
 
-    print(f"Searching for club team: '{team_name}'")
+    print(f"🔍 Searching for club team: '{team_name}'")
+    
+    # Try database first
+    results = search_teams_database(team_name)
+    if results:
+        result = results[0]
+        print(f"✅ Found '{team_name}' in database: {result.get('name')}")
+        TEAM_CACHE[key] = result
+        return result
+    
+    # Fallback to API
+    print(f"📡 Database search failed, trying API...")
     teams = get_all_club_teams(use_cache=True)
-    print(f"Loaded {len(teams)} club teams")
+    print(f"📥 Loaded {len(teams)} club teams from API")
     result = find_team_by_name(team_name, teams)
 
     if result:
         TEAM_CACHE[key] = result
     else:
-        print(f"Club team not found: '{team_name}'")
+        print(f"❌ Club team not found: '{team_name}'")
 
     return result
 
 NATIONAL_TEAM_CACHE = {}
 
 def find_national_team(team_name: str):
+    """Find a national team - tries database first, then API"""
     key = normalize_name(team_name)
 
     if key in NATIONAL_TEAM_CACHE:
-        print(f"Returning cached national team for '{team_name}'")
+        print(f"✅ Returning cached national team for '{team_name}'")
         return NATIONAL_TEAM_CACHE[key]
 
-    print(f"Searching for national team: '{team_name}'")
+    print(f"🔍 Searching for national team: '{team_name}'")
+    
+    # Try database first
+    results = search_teams_database(team_name)
+    if results:
+        result = results[0]
+        print(f"✅ Found '{team_name}' in database: {result.get('name')}")
+        NATIONAL_TEAM_CACHE[key] = result
+        return result
+    
+    # Fallback to API
+    print(f"📡 Database search failed, trying API...")
     teams = get_all_national_teams(use_cache=True)
-    print(f"Loaded {len(teams)} national teams")
+    print(f"📥 Loaded {len(teams)} national teams from API")
     result = find_team_by_name(team_name, teams)
 
     if result:
         NATIONAL_TEAM_CACHE[key] = result
     else:
-        print(f"National team not found: '{team_name}'")
+        print(f"❌ National team not found: '{team_name}'")
 
     return result
 

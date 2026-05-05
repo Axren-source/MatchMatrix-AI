@@ -2,6 +2,7 @@ import pickle
 import pandas as pd
 import asyncio
 import json
+import sys
 
 from pathlib import Path
 import requests
@@ -226,28 +227,58 @@ async def debug_teams(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        from football_api import get_all_club_teams, get_all_national_teams
+        from football_api import load_teams_database, search_teams_database
         
-        await update.message.reply_text("⏳ Loading teams...")
+        await update.message.reply_text("⏳ Loading teams database...")
         
-        club_teams = get_all_club_teams(use_cache=False)
-        national_teams = get_all_national_teams(use_cache=False)
+        teams = load_teams_database()
+        if not teams:
+            await update.message.reply_text("❌ Teams database not found!\n\nRun: python build_teams_db.py")
+            return
         
-        msg = f"📊 Team Data\n\n"
-        msg += f"Club teams loaded: {len(club_teams)}\n"
-        msg += f"National teams loaded: {len(national_teams)}\n\n"
+        msg = f"📊 Teams Database\n\n"
+        msg += f"✅ Total teams: {len(teams)}\n\n"
+        msg += f"📋 Sample teams:\n"
         
-        if club_teams:
-            msg += "📋 Sample club teams:\n"
-            for team in club_teams[:5]:
-                msg += f"• {team.get('name')}\n"
-        
-        if national_teams:
-            msg += "\n🌍 National teams:\n"
-            for team in national_teams[:10]:
-                msg += f"• {team.get('name')}\n"
+        for team in teams[:15]:
+            msg += f"• {team.get('name')}\n"
         
         await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
+async def rebuild_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Rebuild teams database from API"""
+    user_id = update.effective_user.id
+    
+    # Only allow owner
+    if user_id != OWNER_ID:
+        await update.message.reply_text("❌ Admin only")
+        return
+    
+    try:
+        from football_api import TEAMS_DB_CACHE
+        
+        await update.message.reply_text("⏳ Rebuilding teams database...\n\nThis may take a few minutes...")
+        
+        # Clear cache
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "build_teams_db.py"],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode == 0:
+            await update.message.reply_text(
+                "✅ Database rebuilt successfully!\n\n"
+                "📊 You can now search for teams."
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Error building database:\n\n{result.stderr}"
+            )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
@@ -836,6 +867,7 @@ def main():
     app.add_handler(CommandHandler("today", today_matches))
     app.add_handler(CommandHandler("tomorrow", tomorrow_matches))
     app.add_handler(CommandHandler("debug", debug_teams))
+    app.add_handler(CommandHandler("rebuild", rebuild_database))
     app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(CallbackQueryHandler(handle_button))
