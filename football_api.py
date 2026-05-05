@@ -316,7 +316,7 @@ async def async_find_match_in_competitions(home_name: str, away_name: str, date_
             if date_to:
                 params["dateTo"] = date_to
             
-            data = await async_api_get("matches", params)
+            data = await async_api_get(f"competitions/{comp_code}/matches", params)
             
             if not data or "matches" not in data:
                 continue

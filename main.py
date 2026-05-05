@@ -510,20 +510,35 @@ async def process_match_by_id(message_obj, context, home_id, away_id, user_id):
 
     await message_obj.reply_text("⏳ Analyzing match...")
 
-    home_team = {"id": home_id, "name": f"Home {home_id}"}
-    away_team = {"id": away_id, "name": f"Away {away_id}"}
+    home_data, away_data = await asyncio.gather(
+        async_api_get(f"teams/{home_id}"),
+        async_api_get(f"teams/{away_id}")
+    )
 
-    # Fetch real names
-    home_data = await async_api_get(f"teams/{home_id}")
-    away_data = await async_api_get(f"teams/{away_id}")
+    if not home_data or not away_data:
+        await message_obj.reply_text("❌ Could not fetch teams.")
+        return
 
-    if home_data:
-        home_team["name"] = home_data.get("name")
+    home_team = home_data
+    away_team = away_data
 
-    if away_data:
-        away_team["name"] = away_data.get("name")
+    # 🔥 SAME AS MAIN LOGIC
+    home_matches, away_matches = await asyncio.gather(
+        async_api_get(f"teams/{home_id}/matches", {"status": "FINISHED", "limit": 5}),
+        async_api_get(f"teams/{away_id}/matches", {"status": "FINISHED", "limit": 5}),
+    )
 
-    # Continue EXACT SAME logic as process_match_request
+    home_stats = compute_team_stats(home_matches.get("matches", []), home_id)
+    away_stats = compute_team_stats(away_matches.get("matches", []), away_id)
+
+    if not home_stats or not away_stats:
+        await message_obj.reply_text("❌ Not enough data.")
+        return
+
+    # 👉 reuse your prediction logic here
+    await message_obj.reply_text(
+        f"📊 {home_team['name']} vs {away_team['name']}\n\n✅ Analysis working!"
+    )
 
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -563,20 +578,6 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context,
             int(home_id),
             int(away_id),
-            update.effective_user.id
-        )
-        match_text = MATCH_BUTTON_CACHE.get(query.data)
-        if not match_text:
-            await query.message.reply_text(
-                "❌ Match button expired. Send the match manually with text like:\n"
-                "Arsenal vs Atletico"
-            )
-            return
-
-        await process_match_request(
-            query.message,
-            context,
-            match_text,
             update.effective_user.id
         )
 
@@ -780,14 +781,16 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
             home_name, away_name
         )
         
-        if not match_data:
+        if match_data:
+            home_team = match_data.get("homeTeam")
+            away_team = match_data.get("awayTeam")
+            competition_info = f"\n🏆 Competition: {found_comp_name}"
+            print(f"✅ Found match in {found_comp_name}")
+        else:
             await message_obj.reply_text(
                 "⚠️ Match not found in schedule.\n"
                 "Analyzing based on team stats instead..."
             )
-        else:
-            await message_obj.reply_text("❌ Team not found in any competition.")
-            return
 
     if not home_team or not away_team:
         await message_obj.reply_text("❌ Could not find match data.")
