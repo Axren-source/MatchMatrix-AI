@@ -95,62 +95,25 @@ ALIASES = {
     "barca": "Barcelona"
 }
 
-def load_all_teams():
-    global TEAM_CACHE
-
-    if TEAM_CACHE:
-        return TEAM_CACHE
-
-    print("🔥 Loading teams database...")
-
-    data = api_get("teams")
-
-    if not data or "teams" not in data:
-        print("❌ Failed to load teams")
-        return []
-
-    TEAM_CACHE = data["teams"]
-    print(f"✅ Loaded {len(TEAM_CACHE)} teams")
-
-    return TEAM_CACHE
-
-
 def find_team_by_name(name: str):
-    teams = load_all_teams()
-    name = ALIASES.get(name.lower(), name)
+    print(f"🔍 Searching API for: {name}")
 
-    best_match = None
-    best_score = 0
+    data = api_get("teams", {"name": name})
 
-    for team in teams:
-        team_name = team.get("name", "").lower()
+    if not data or not data.get("teams"):
+        print("❌ No teams found")
+        return None
 
-        score = 0
+    best = data["teams"][0]
 
-        if name == team_name:
-            score = 100
-        elif name in team_name:
-            score = 90
-        elif any(word in team_name for word in name.split()):
-            score = 70
-
-        if score > best_score:
-            best_score = score
-            best_match = team
-
-    if best_match:
-        print(f"✅ Found: {best_match['name']}")
-        return {
-            "id": best_match.get("id"),
-            "name": best_match.get("name"),
-            "shortName": best_match.get("shortName"),
-            "tla": best_match.get("tla"),
-            "country": best_match.get("area", {}).get("name", ""),
-            "crest": best_match.get("crest")
-        }
-
-    print("❌ No match found")
-    return None
+    return {
+        "id": best.get("id"),
+        "name": best.get("name"),
+        "shortName": best.get("shortName"),
+        "tla": best.get("tla"),
+        "country": best.get("area", {}).get("name", ""),
+        "crest": best.get("crest")
+    }
 
 # =========================
 # TEAM STATS ENGINE (🔥 CORE LOGIC)
