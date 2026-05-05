@@ -24,13 +24,13 @@ from football_api import (
     async_api_get,
     find_national_team,
     find_club_team,
-    get_scheduled_matches_from_competition,
+    async_get_scheduled_matches_from_competition,
     async_collect_team_dataset,
     async_get_scheduled_matches_from_competition,
     search_teams_database,
     compute_match_intensity
 )
-from config import API_KEY, BASE_URL, FAST_COMPETITIONS, COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
+from config import API_KEY, BASE_URL, FAST_COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS
 
 import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
