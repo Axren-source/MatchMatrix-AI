@@ -238,29 +238,24 @@ def compute_match_intensity(matches):
 # SCHEDULED MATCHES
 # =========================
 async def async_get_scheduled_matches_from_competition(code=None, date_from=None, date_to=None):
-    params = {"status": "SCHEDULED"}
+    params = {}
 
     if date_from:
         params["dateFrom"] = date_from
     if date_to:
         params["dateTo"] = date_to
 
-    # If code provided, query specific competition; otherwise query all matches
+    # 🔥 IMPORTANT: remove strict filter
+    # params["status"] = "SCHEDULED"
+
     endpoint = f"competitions/{code}/matches" if code else "matches"
 
-    try:
-        data = await async_api_get(endpoint, params)
-        
-        if not data:
-            print(f"⚠️ No data from {endpoint}")
-            return []
-        
-        matches = data.get("matches", [])
-        print(f"✅ Found {len(matches)} scheduled matches from {endpoint}")
-        return matches
-    except Exception as e:
-        print(f"❌ Error fetching from {endpoint}: {e}")
-        return []
+    data = await async_api_get(endpoint, params=params)
+
+    if data and "matches" in data:
+        return data["matches"]
+
+    return []
 
 
 # =========================
@@ -326,3 +321,26 @@ async def async_find_match_in_competitions(home_name: str, away_name: str, date_
             continue
     
     return None, None, None
+
+def search_team_by_name(name: str):
+    """Search for a team using football-data API"""
+    print(f"🔍 Searching API for team: {name}")
+
+    data = api_get("teams")
+
+    if not data or "teams" not in data:
+        print("❌ API returned no teams")
+        return None
+
+    name_lower = name.lower()
+
+    for team in data["teams"]:
+        team_name = team.get("name", "").lower()
+
+        # Flexible matching
+        if name_lower in team_name or team_name in name_lower:
+            print(f"✅ Found: {team['name']} (ID: {team['id']})")
+            return team
+
+    print("❌ No match found in API")
+    return None

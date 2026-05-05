@@ -28,7 +28,7 @@ from football_api import (
     find_national_team,
     find_club_team,
     async_get_scheduled_matches_from_competition,
-    async_collect_team_dataset,
+    search_team_by_name,
     async_find_match_in_competitions,
     compute_team_stats,
 )
@@ -677,15 +677,15 @@ def detect_match_mode(home_name, away_name, selected_mode=None):
     Returns: (home_team, away_team, is_international, competitions_list, competition_code, competition_name)
     """
     if selected_mode == "club":
-        home_team = find_club_team(home_name)
-        away_team = find_club_team(away_name)
+        home_team = search_team_by_name(home_name)
+        away_team = search_team_by_name(away_name)
         if home_team and away_team and home_team['id'] != away_team['id']:
             return home_team, away_team, 0, CLUB_COMPETITIONS, None, None
         return None, None, None, None, None, None
 
     if selected_mode == "international":
-        home_team = find_national_team(home_name)
-        away_team = find_national_team(away_name)
+        home_team = search_team_by_name(home_name)
+        away_team = search_team_by_name(away_name)
         if home_team and away_team and home_team['id'] != away_team['id']:
             return home_team, away_team, 1, INTERNATIONAL_COMPETITIONS, None, None
         return None, None, None, None, None, None
