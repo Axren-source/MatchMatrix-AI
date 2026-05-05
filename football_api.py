@@ -7,6 +7,29 @@ import json
 import os
 
 # These two functions MUST be defined for the rest of the file to work
+def collect_team_dataset(team_id: int, limit: int = 20):
+    """
+    Synchronous collection of a team's past matches for analysis.
+    Uses the /v4/teams/{id}/matches endpoint with FINISHED status.
+    """
+    params = {"status": "FINISHED", "limit": limit}
+    data = api_get(f"teams/{team_id}/matches", params=params)
+    
+    if data and "matches" in data:
+        return data["matches"]
+    return []
+
+async def async_collect_team_dataset(team_id: int, limit: int = 20):
+    """
+    Asynchronous version for the Telegram bot to gather team history.
+    This provides the dataset needed for the prediction analysis.
+    """
+    params = {"status": "FINISHED", "limit": limit}
+    data = await async_api_get(f"teams/{team_id}/matches", params=params)
+    
+    if data and "matches" in data:
+        return data["matches"]
+    return []
 
 def api_get(endpoint, params=None):
     """Synchronous GET request for database building"""
@@ -114,6 +137,16 @@ def search_teams_database(search_term: str):
             results.append(team)
     
     return results
+
+async def async_get_scheduled_matches_from_competition(code: str):
+    """Async version for the Telegram bot's real-time updates[cite: 1, 3]"""
+    params = {"status": "SCHEDULED"}
+    # Use lowercase 'async_api_get' to match your function definition
+    data = await async_api_get(f"competitions/{code}/matches", params=params)
+    
+    if data and "matches" in data:
+        return data["matches"]
+    return []
 
 def normalize_team_object(team: dict):
     """
