@@ -2,31 +2,28 @@ import os
 
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:
-    raise ValueError("API_KEY environment variable is not set. Please set it before running the bot.")
+    raise ValueError("API_KEY environment variable is not set.")
 
-BASE_URL = "https://apiv3.apifootball.com/"
+# New Base URL for football-data.org
+BASE_URL = "https://api.football-data.org/v4/"
 
-HEADERS = {}
-
-# Known competition IDs for api-football
+# Football-data.org uses string codes for competitions
 COMPETITIONS = {
-    1: "FIFA World Cup",
-    2: "UEFA Champions League",
-    78: "Bundesliga",
-    88: "Eredivisie",
-    71: "Campeonato Brasileiro Série A",
-    302: "La Liga",
-    61: "Ligue 1",
-    72: "Championship",
-    94: "Primeira Liga",
-    4: "European Championship",
-    135: "Serie A",
-    152: "Premier League"
+    "WC": "FIFA World Cup",
+    "CL": "UEFA Champions League",
+    "BL1": "Bundesliga",
+    "DED": "Eredivisie",
+    "BSA": "Campeonato Brasileiro Série A",
+    "PD": "La Liga",
+    "FL1": "Ligue 1",
+    "ELC": "Championship",
+    "PPL": "Primeira Liga",
+    "EC": "European Championship",
+    "SA": "Serie A",
+    "PL": "Premier League"
 }
 
-# Split types for team lookup (use league IDs compatible with api-football)
-CLUB_COMPETITIONS = [2, 78, 88, 71, 302, 61, 72, 94, 135, 152]
-INTERNATIONAL_COMPETITIONS = [1, 4]
-
-# Fast mode for today's schedule lookup if specific leagues are needed
-FAST_COMPETITIONS = [152, 302, 78]  # Premier League, La Liga, Bundesliga
+# Tier 1 Leagues available on Free/Standard plans
+CLUB_COMPETITIONS = ["PL", "PD", "BL1", "SA", "FL1", "CL", "PPL", "DED"]
+INTERNATIONAL_COMPETITIONS = ["WC", "EC"]
+FAST_COMPETITIONS = ["PL", "PD", "BL1"]
