@@ -182,14 +182,14 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if query.data == "today":
-        await today_matches(query.message, context)
+        await today_matches(update, context)
 
     elif query.data == "tomorrow":
-        await tomorrow_matches(query.message, context)
+        await tomorrow_matches(update, context)
 
     elif query.data.startswith("match:"):
         _, fixture_id = query.data.split(":")
-        await process_match_by_id(query.message, int(fixture_id))
+        await process_match_by_id(update, int(fixture_id))
 
 # =========================
 # HANDLE TEXT
@@ -213,7 +213,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Fake fixture (just compare teams)
-    await process_match_by_id(update.message, home_team["id"])
+    await process_match_by_id(update, home_team["id"])
 
 # =========================
 # MAIN
