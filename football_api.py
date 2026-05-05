@@ -287,3 +287,42 @@ def find_club_team(name: str):
 
 def find_national_team(name: str):
     return find_team_by_name(name)
+
+async def async_find_match_in_competitions(home_name: str, away_name: str, date_from=None, date_to=None):
+    """
+    Search for a match across ALL competitions defined in config.
+    Returns the match data with competition info if found.
+    """
+    from config import COMPETITIONS
+    
+    home_name_lower = home_name.lower()
+    away_name_lower = away_name.lower()
+    
+    # Try to find match by searching all competitions
+    for comp_code in COMPETITIONS.keys():
+        try:
+            params = {"status": "SCHEDULED"}
+            if date_from:
+                params["dateFrom"] = date_from
+            if date_to:
+                params["dateTo"] = date_to
+            
+            data = await async_api_get(f"competitions/{comp_code}/matches", params)
+            
+            if not data or "matches" not in data:
+                continue
+            
+            matches = data.get("matches", [])
+            for match in matches:
+                home = match.get("homeTeam", {}).get("name", "").lower()
+                away = match.get("awayTeam", {}).get("name", "").lower()
+                
+                # Flexible matching - check if names are contained or vice versa
+                if ((home_name_lower in home or home in home_name_lower) and 
+                    (away_name_lower in away or away in away_name_lower)):
+                    return match, comp_code, COMPETITIONS[comp_code]
+        except Exception as e:
+            print(f"⚠️ Error searching {comp_code}: {e}")
+            continue
+    
+    return None, None, None

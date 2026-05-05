@@ -29,6 +29,7 @@ from football_api import (
     find_club_team,
     async_get_scheduled_matches_from_competition,
     async_collect_team_dataset,
+    async_find_match_in_competitions,
     compute_team_stats,
 )
 from analyzer import calculate_win_chances
@@ -671,32 +672,36 @@ def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_wi
     return main_score, alt_scores, xg_home, xg_away
 
 def detect_match_mode(home_name, away_name, selected_mode=None):
+    """
+    Detect match type and search across ALL configured competitions.
+    Returns: (home_team, away_team, is_international, competitions_list, competition_code, competition_name)
+    """
     if selected_mode == "club":
         home_team = find_club_team(home_name)
         away_team = find_club_team(away_name)
         if home_team and away_team and home_team['id'] != away_team['id']:
-            return home_team, away_team, 0, CLUB_COMPETITIONS
-        return None, None, None, None
+            return home_team, away_team, 0, CLUB_COMPETITIONS, None, None
+        return None, None, None, None, None, None
 
     if selected_mode == "international":
         home_team = find_national_team(home_name)
         away_team = find_national_team(away_name)
         if home_team and away_team and home_team['id'] != away_team['id']:
-            return home_team, away_team, 1, INTERNATIONAL_COMPETITIONS
-        return None, None, None, None
+            return home_team, away_team, 1, INTERNATIONAL_COMPETITIONS, None, None
+        return None, None, None, None, None, None
 
     # Auto mode: try clubs first, then national teams
     home_team = find_club_team(home_name)
     away_team = find_club_team(away_name)
     if home_team and away_team and home_team['id'] != away_team['id']:
-        return home_team, away_team, 0, CLUB_COMPETITIONS
+        return home_team, away_team, 0, CLUB_COMPETITIONS, None, None
 
     home_team = find_national_team(home_name)
     away_team = find_national_team(away_name)
     if home_team and away_team and home_team['id'] != away_team['id']:
-        return home_team, away_team, 1, INTERNATIONAL_COMPETITIONS
+        return home_team, away_team, 1, INTERNATIONAL_COMPETITIONS, None, None
 
-    return None, None, None, None
+    return None, None, None, None, None, None
 
 def generate_explanation(home_stats, away_stats):
     reasons = []
@@ -728,12 +733,33 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     await message_obj.reply_text("⏳ Analyzing...")
 
     mode = context.user_data.get("mode")
-    home_team, away_team, is_international, _ = detect_match_mode(
+    home_team, away_team, is_international, comps_list, comp_code, comp_name = detect_match_mode(
         home_name, away_name, mode
     )
 
+    # If detect_match_mode failed, try searching across all competitions
+    competition_info = ""
     if not home_team or not away_team:
-        await message_obj.reply_text("❌ Team not found.")
+        print("⚠️ Team detection failed, trying competition search...")
+        await message_obj.reply_text("⏳ Searching all competitions...")
+        
+        match_data, found_comp_code, found_comp_name = await async_find_match_in_competitions(
+            home_name, away_name
+        )
+        
+        if match_data:
+            home_team = match_data.get("homeTeam")
+            away_team = match_data.get("awayTeam")
+            comp_code = found_comp_code
+            comp_name = found_comp_name
+            competition_info = f"\n🏆 Competition: {comp_name}"
+            print(f"✅ Found match in {comp_name}")
+        else:
+            await message_obj.reply_text("❌ Team not found in any competition.")
+            return
+
+    if not home_team or not away_team:
+        await message_obj.reply_text("❌ Could not find match data.")
         return
 
     # 🔥 GET MATCH DATA
@@ -805,9 +831,9 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     else:
         verdict = "Draw"
 
-    # 🔥 OUTPUT - Enhanced with betting tips
+    # 🔥 OUTPUT - Enhanced with betting tips and competition info
     msg = (
-        f"📊 {home_team['name']} vs {away_team['name']}\n\n"
+        f"📊 {home_team['name']} vs {away_team['name']}{competition_info}\n\n"
         f"💰 WIN PROBABILITIES:\n"
         f"🏠 {home_team['name']}: {home_win:.1f}%\n"
         f"🤝 Draw: {draw:.1f}%\n"
