@@ -81,9 +81,9 @@ def score_match(query, team_name):
     if query == name:
         return 100
     if query in name:
+        return 90
+    if any(word in name for word in query.split()):
         return 70
-    if name.startswith(query):
-        return 80
     return 0
 
 def find_team_by_name(name: str):

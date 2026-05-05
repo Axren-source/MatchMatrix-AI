@@ -768,24 +768,19 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
 
     # If detect_match_mode failed, try searching across all competitions
     competition_info = ""
+
+    # 🔥 ALWAYS fallback to API search
     if not home_team or not away_team:
-        print("⚠️ Team detection failed, trying competition search...")
-        await message_obj.reply_text("⏳ Searching all competitions...")
-        
-        match_data, found_comp_code, found_comp_name = await async_find_match_in_competitions(
-            home_name, away_name
-        )
-        
-        if match_data:
-            home_team = match_data.get("homeTeam")
-            away_team = match_data.get("awayTeam")
-            competition_info = f"\n🏆 Competition: {found_comp_name}"
-            print(f"✅ Found match in {found_comp_name}")
-        else:
+        print("⚠️ Trying direct API team search...")
+
+        home_team = find_club_team(home_name) or find_national_team(home_name)
+        away_team = find_club_team(away_name) or find_national_team(away_name)
+
+        if not home_team or not away_team:
             await message_obj.reply_text(
-                "⚠️ Match not found in schedule.\n"
-                "Analyzing based on team stats instead..."
+                "❌ Team not found.\n\nTry:\nArsenal vs Atletico Madrid"
             )
+            return
 
     if not home_team or not away_team:
         await message_obj.reply_text("❌ Could not find match data.")
