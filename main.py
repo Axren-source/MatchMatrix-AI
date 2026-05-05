@@ -747,13 +747,11 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
             home_name, away_name
         )
         
-        if match_data:
-            home_team = match_data.get("homeTeam")
-            away_team = match_data.get("awayTeam")
-            comp_code = found_comp_code
-            comp_name = found_comp_name
-            competition_info = f"\n🏆 Competition: {comp_name}"
-            print(f"✅ Found match in {comp_name}")
+        if not match_data:
+            await message_obj.reply_text(
+                "⚠️ Match not found in schedule.\n"
+                "Analyzing based on team stats instead..."
+            )
         else:
             await message_obj.reply_text("❌ Team not found in any competition.")
             return
@@ -846,20 +844,39 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     
     # Add betting tips
     tips = []
-    if home_win > 50:
-        tips.append(f"✅ Strong home advantage: {home_team['name']} in excellent form")
-    if away_win > 50:
-        tips.append(f"✅ Away team threat: {away_team['name']} playing well on the road")
-    if draw >= 40:
-        tips.append(f"⚖️ High draw probability ({draw:.0f}%) - consider both 1X2 and draw bets")
-    if home_stats['goals_scored_avg'] > 2 and away_stats['goals_scored_avg'] > 2:
-        tips.append(f"⚽ OVER 2.5 likely - Both teams score freely")
-    elif xg_home + xg_away < 2.5:
-        tips.append(f"🔒 UNDER 2.5 likely - Defensive match expected")
-    if home_stats['clean_sheet_rate'] > 0.6:
-        tips.append(f"🛡️ {home_team['name']} strong defense - BTTS unlikely")
-    if abs(home_win - away_win) < 5:
-        tips.append(f"🎯 Close match - High odds on underdog")
+
+    # 🏆 Match winner logic
+    if home_win > 55:
+        tips.append(f"🔥 {home_team['name']} likely to win")
+    elif away_win > 55:
+        tips.append(f"🔥 {away_team['name']} likely to win")
+    elif draw > 35:
+        tips.append("⚖️ Draw is a strong possibility")
+
+    # ⚽ Goals market
+    total_xg = xg_home + xg_away
+
+    if total_xg >= 3:
+        tips.append("⚽ OVER 2.5 goals looks strong")
+    elif total_xg <= 2.2:
+        tips.append("🔒 UNDER 2.5 goals likely")
+
+    # 🎯 Both teams to score
+    if xg_home > 1.2 and xg_away > 1.2:
+        tips.append("✅ BTTS (Both Teams To Score) – YES")
+    elif xg_home < 1.0 or xg_away < 1.0:
+        tips.append("❌ BTTS – NO")
+
+    # 🛡️ Clean sheet angle
+    if home_stats["clean_sheet_rate"] > 0.6:
+        tips.append(f"🛡️ {home_team['name']} clean sheet possible")
+
+    # 🎲 Value bet (close match)
+    if abs(home_win - away_win) < 7:
+        tips.append("🎯 Value bet: Underdog or draw")
+
+    # 📊 Confidence
+    confidence = max(home_win, draw, away_win)
     
     if tips:
         msg += "💡 BETTING TIPS:\n"

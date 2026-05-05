@@ -296,13 +296,13 @@ async def async_find_match_in_competitions(home_name: str, away_name: str, date_
     # Try to find match by searching all competitions
     for comp_code in COMPETITIONS.keys():
         try:
-            params = {"status": "SCHEDULED"}
+            params = {}
             if date_from:
                 params["dateFrom"] = date_from
             if date_to:
                 params["dateTo"] = date_to
             
-            data = await async_api_get(f"competitions/{comp_code}/matches", params)
+            data = await async_api_get("matches", params)
             
             if not data or "matches" not in data:
                 continue
@@ -313,8 +313,10 @@ async def async_find_match_in_competitions(home_name: str, away_name: str, date_
                 away = match.get("awayTeam", {}).get("name", "").lower()
                 
                 # Flexible matching - check if names are contained or vice versa
-                if ((home_name_lower in home or home in home_name_lower) and 
-                    (away_name_lower in away or away in away_name_lower)):
+                def name_match(a, b):
+                    return a in b or b in a
+
+                if name_match(home_name_lower, home) and name_match(away_name_lower, away):
                     return match, comp_code, COMPETITIONS[comp_code]
         except Exception as e:
             print(f"⚠️ Error searching {comp_code}: {e}")
