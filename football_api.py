@@ -91,7 +91,6 @@ TEAM_CACHE = []
 def find_team_by_name(name: str):
     print(f"🔍 Searching API for: {name}")
 
-    # 🔥 ALIASES (CRITICAL)
     ALIASES = {
         "psg": "Paris Saint-Germain",
         "paris": "Paris Saint-Germain",
@@ -102,45 +101,36 @@ def find_team_by_name(name: str):
         "man city": "Manchester City"
     }
 
+    # 🔥 APPLY ALIAS
     name = ALIASES.get(name.lower(), name)
 
     data = api_get("teams", {"name": name})
 
     if not data or not data.get("teams"):
-        print("❌ No teams found from API")
+        print("❌ No teams from API")
         return None
 
-    query = name.lower().replace("-", " ").replace(".", "")
+    query = name.lower()
 
-    best = None
-    best_score = 0
-
+    # 🔥 FIRST: TRY DIRECT CONTAINS (VERY IMPORTANT)
     for team in data["teams"]:
-        team_name = team.get("name", "").lower().replace("-", " ").replace(".", "")
+        team_name = team.get("name", "").lower()
 
-        score = 0
+        if query in team_name:
+            print(f"✅ Direct match: {team['name']}")
+            return {
+                "id": team.get("id"),
+                "name": team.get("name"),
+                "shortName": team.get("shortName"),
+                "tla": team.get("tla"),
+                "country": team.get("area", {}).get("name", ""),
+                "crest": team.get("crest")
+            }
 
-        # EXACT
-        if query == team_name:
-            score = 100
+    # 🔥 SECOND: FALLBACK → RETURN FIRST RESULT (DON’T FAIL)
+    best = data["teams"][0]
 
-        # CONTAINS
-        elif query in team_name:
-            score = 90
-
-        # WORD MATCH
-        elif any(word in team_name for word in query.split()):
-            score = 70
-
-        if score > best_score:
-            best_score = score
-            best = team
-
-    if not best:
-        print("❌ No good match after scoring")
-        return None
-
-    print(f"✅ Best match: {best['name']}")
+    print(f"⚠️ Fallback match: {best['name']}")
 
     return {
         "id": best.get("id"),
