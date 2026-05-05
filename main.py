@@ -429,11 +429,22 @@ async def today_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = []
-    for m in matches[:15]:
-        if m.get('home') and m.get('away'):
-            text = f"{m['home']} vs {m['away']}"
-            callback_data = f"matchid:{m['home_id']}:{m['away_id']}"
-            keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
+    for m in matches:
+        home = m.get("homeTeam", {}).get("name")
+        away = m.get("awayTeam", {}).get("name")
+
+        home_id = m.get("homeTeam", {}).get("id")
+        away_id = m.get("awayTeam", {}).get("id")
+
+        if not home or not away or not home_id or not away_id:
+            continue
+
+        text = f"{home} vs {away}"
+        callback_data = f"matchid:{home_id}:{away_id}"
+
+        keyboard.append([
+            InlineKeyboardButton(text, callback_data=callback_data)
+        ])
 
     if not keyboard:
         await update.message.reply_text("❌ Could not parse match data.")
@@ -471,11 +482,22 @@ async def tomorrow_matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = []
-    for m in matches[:15]:
-        if m.get('home') and m.get('away'):
-            text = f"{m['home']} vs {m['away']}"
-            callback_data = f"matchid:{m['home_id']}:{m['away_id']}"
-            keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
+    for m in matches:
+        home = m.get("homeTeam", {}).get("name")
+        away = m.get("awayTeam", {}).get("name")
+
+        home_id = m.get("homeTeam", {}).get("id")
+        away_id = m.get("awayTeam", {}).get("id")
+
+        if not home or not away or not home_id or not away_id:
+            continue
+
+        text = f"{home} vs {away}"
+        callback_data = f"matchid:{home_id}:{away_id}"
+
+        keyboard.append([
+            InlineKeyboardButton(text, callback_data=callback_data)
+        ])
 
     if not keyboard:
         await update.message.reply_text("❌ Could not parse match data.")
