@@ -87,39 +87,48 @@ def score_match(query, team_name):
     return 0
 
 TEAM_CACHE = []
-ALIASES = {
-    "paris": "Paris Saint-Germain",
-    "psg": "Paris Saint-Germain",
-    "bayern": "FC Bayern München",
-    "atletico": "Atlético Madrid",
-    "man utd": "Manchester United",
-    "man city": "Manchester City",
-    "barca": "Barcelona"
-}
 
 def find_team_by_name(name: str):
-    name = ALIASES.get(name.lower(), name)
     print(f"🔍 Searching API for: {name}")
+
+    # 🔥 ALIASES (CRITICAL)
+    ALIASES = {
+        "psg": "Paris Saint-Germain",
+        "paris": "Paris Saint-Germain",
+        "bayern": "FC Bayern München",
+        "atletico": "Atlético Madrid",
+        "barca": "Barcelona",
+        "man utd": "Manchester United",
+        "man city": "Manchester City"
+    }
+
+    name = ALIASES.get(name.lower(), name)
 
     data = api_get("teams", {"name": name})
 
     if not data or not data.get("teams"):
-        print("❌ No teams found")
+        print("❌ No teams found from API")
         return None
 
-    query = name.lower()
+    query = name.lower().replace("-", " ").replace(".", "")
+
     best = None
     best_score = 0
 
     for team in data["teams"]:
-        team_name = team.get("name", "").lower()
+        team_name = team.get("name", "").lower().replace("-", " ").replace(".", "")
 
         score = 0
 
+        # EXACT
         if query == team_name:
             score = 100
+
+        # CONTAINS
         elif query in team_name:
             score = 90
+
+        # WORD MATCH
         elif any(word in team_name for word in query.split()):
             score = 70
 
@@ -128,7 +137,7 @@ def find_team_by_name(name: str):
             best = team
 
     if not best:
-        print("❌ No good match")
+        print("❌ No good match after scoring")
         return None
 
     print(f"✅ Best match: {best['name']}")
