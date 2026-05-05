@@ -368,11 +368,41 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
            update.effective_user.id
         )
 
+async def get_team_player_form(team_id):
+    """
+    Estimate team strength from recent player performances
+    """
+    try:
+        matches = await async_collect_team_dataset(team_id, recent_limit=5)
+        if not matches:
+            return {
+                "attack_boost": 0,
+                "defense_boost": 0
+            }
+
+        goals = matches["goals_scored_avg"]
+        conceded = matches["goals_conceded_avg"]
+
+        # Normalize impact
+        attack_boost = min(goals * 0.2, 0.6)
+        defense_boost = min((1.5 - conceded) * 0.2, 0.6)
+
+        return {
+            "attack_boost": attack_boost,
+            "defense_boost": defense_boost
+        }
+
+    except Exception:
+        return {
+            "attack_boost": 0,
+            "defense_boost": 0
+        }
+
 def clamp_goals(value, min_goals=0, max_goals=4):
     return max(min_goals, min(max_goals, value))
 
 
-def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_win_prob):
+def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_win_prob, home_form_boost, away_form_boost):
     """
     Better score prediction using both:
     - model probabilities
@@ -394,6 +424,13 @@ def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_wi
     # Simple xG-style estimate
     xg_home = (home_attack * 0.65) + (away_defense * 0.35)
     xg_away = (away_attack * 0.65) + (home_defense * 0.35)
+
+# 🔥 PLAYER FORM IMPACT
+    xg_home += home_form_boost["attack_boost"]
+    xg_away += away_form_boost["attack_boost"]
+
+    xg_home -= away_form_boost["defense_boost"]
+    xg_away -= home_form_boost["defense_boost"]
 
     # Slight adjustment from match outcome probabilities
     prob_diff = home_win_prob - away_win_prob
@@ -533,9 +570,11 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         return
 
 
-    home_stats, away_stats = await asyncio.gather(
-        async_collect_team_dataset(home_team["id"], recent_limit=5),
-        async_collect_team_dataset(away_team["id"], recent_limit=5)
+    home_stats, away_stats, home_form_boost, away_form_boost = await asyncio.gather(
+      async_collect_team_dataset(home_team["id"], recent_limit=5),
+      async_collect_team_dataset(away_team["id"], recent_limit=5),
+      get_team_player_form(home_team["id"]),
+      get_team_player_form(away_team["id"]),
     )
 
     if home_stats is None:
@@ -568,7 +607,9 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         away_stats,
         home_win,
         draw,
-        away_win
+        away_win,
+        home_form_boost,
+        away_form_boost
     )
 
     if home_win > draw and home_win > away_win:
@@ -624,6 +665,12 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     lines.append(f"xG estimate: {home_team['name']} {xg_home:.2f} - {xg_away:.2f} {away_team['name']}")
     lines.append("")
     lines.append(f"Likely winner from score: {verdict}")
+    lines.append("")
+    lines.append("🧍 Player Impact")
+    lines.append(f"{home_team['name']}: +{home_form_boost['attack_boost']:.2f} attack")
+    lines.append(f"{away_team['name']}: +{away_form_boost['attack_boost']:.2f} attack")
+    lines.append(f"{home_team['name']}: -{home_form_boost['defense_boost']:.2f} defense")
+    lines.append(f"{away_team['name']}: -{away_form_boost['defense_boost']:.2f} defense")
     lines.append("")
     lines.append(f"🧠 Insight: {explanation}")
 
