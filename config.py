@@ -1,7 +1,7 @@
 import os
 
 API_KEY = os.getenv("API_KEY")
-BASE_URL = "https://api.football-data.org/v4"
+BASE_URL = "https://v3.football.api-sports.io"
 
 COMPETITIONS = {
     "WC": "FIFA World Cup",
