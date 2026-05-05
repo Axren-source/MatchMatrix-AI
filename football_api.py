@@ -86,28 +86,52 @@ def score_match(query, team_name):
         return 70
     return 0
 
-def find_team_by_name(name: str):
-    print(f"🔍 Searching team: {name}")
+TEAM_CACHE = []
+ALIASES = {
+    "atletico": "Atletico Madrid",
+    "man utd": "Manchester United",
+    "man city": "Manchester City",
+    "psg": "Paris Saint-Germain",
+    "barca": "Barcelona"
+}
 
-    data = api_get("teams")  # NO params
+def load_all_teams():
+    global TEAM_CACHE
+
+    if TEAM_CACHE:
+        return TEAM_CACHE
+
+    print("🔥 Loading teams database...")
+
+    data = api_get("teams")
 
     if not data or "teams" not in data:
-        print("❌ No teams returned from API")
-        return None
+        print("❌ Failed to load teams")
+        return []
 
-    name_lower = name.lower()
+    TEAM_CACHE = data["teams"]
+    print(f"✅ Loaded {len(TEAM_CACHE)} teams")
+
+    return TEAM_CACHE
+
+
+def find_team_by_name(name: str):
+    teams = load_all_teams()
+    name = ALIASES.get(name.lower(), name)
+
     best_match = None
     best_score = 0
 
-    for team in data["teams"]:
+    for team in teams:
         team_name = team.get("name", "").lower()
 
         score = 0
-        if name_lower == team_name:
+
+        if name == team_name:
             score = 100
-        elif name_lower in team_name:
-            score = 80
-        elif team_name.startswith(name_lower):
+        elif name in team_name:
+            score = 90
+        elif any(word in team_name for word in name.split()):
             score = 70
 
         if score > best_score:
@@ -116,7 +140,14 @@ def find_team_by_name(name: str):
 
     if best_match:
         print(f"✅ Found: {best_match['name']}")
-        return best_match
+        return {
+            "id": best_match.get("id"),
+            "name": best_match.get("name"),
+            "shortName": best_match.get("shortName"),
+            "tla": best_match.get("tla"),
+            "country": best_match.get("area", {}).get("name", ""),
+            "crest": best_match.get("crest")
+        }
 
     print("❌ No match found")
     return None
