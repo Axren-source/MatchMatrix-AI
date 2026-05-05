@@ -8,14 +8,11 @@ import aiohttp
 from config import (
     API_KEY,
     BASE_URL,
+    HEADERS,
     COMPETITIONS,
     CLUB_COMPETITIONS,
     INTERNATIONAL_COMPETITIONS,
 )
-
-HEADERS = {
-    "X-Auth-Token": API_KEY
-}
 
 session = requests.Session()
 session.headers.update(HEADERS)
@@ -37,7 +34,14 @@ async def async_api_get(url, params=None, retries=5):
                         await asyncio.sleep(wait_time)
                         wait_time *= 2
                         continue
-                    response.raise_for_status()
+                    
+                    if response.status != 200:
+                        text = await response.text()
+                        print(f"API Error {response.status}: {text}")
+                        if response.status == 402:
+                            raise Exception("API Error 402: Forbidden. Check your API key or account permissions.")
+                        response.raise_for_status()
+                    
                     return await response.json()
             except aiohttp.ClientError as e:
                 if attempt == retries - 1:
@@ -61,7 +65,12 @@ def api_get(url, params=None, retries=5):
             wait_time *= 2
             continue
 
-        response.raise_for_status()
+        if response.status_code != 200:
+            print(f"API Error {response.status_code}: {response.text}")
+            if response.status_code == 402:
+                raise Exception("API Error 402: Forbidden. Check your API key or account permissions.")
+            response.raise_for_status()
+        
         return response.json()
 
     raise Exception("Too many requests. Please wait and try again.")
