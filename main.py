@@ -333,7 +333,6 @@ async def get_matches_by_date(date):
             {
                 "dateFrom": date,
                 "dateTo": date,
-                "status": "SCHEDULED"
             }
         )
 
