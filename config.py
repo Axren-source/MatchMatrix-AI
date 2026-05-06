@@ -5,7 +5,7 @@ API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://v3.football.api-sports.io/"
 
 HEADERS = {
-    "x-apisports-key": "API_KEY"
+    "x-apisports-key": "5c9edc916c8d579ab97ff2097ab91544"
 }
 
 # ✅ REAL API-FOOTBALL LEAGUE IDS
