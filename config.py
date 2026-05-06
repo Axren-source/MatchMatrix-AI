@@ -40,5 +40,12 @@ INTERNATIONAL_COMPETITIONS = [
 FAST_COMPETITIONS = [
     "PL",
     "PD",
-    "BL1"
+    "BL1",
+    "SA",
+    "FL1",
+    "CL",
+    "EL",
+    "ELC",
+    "PPL",
+    "DED"
 ]
