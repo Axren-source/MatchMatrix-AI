@@ -41,3 +41,5 @@ CLUB_COMPETITIONS = [39, 140, 78, 135, 61, 2, 3]
 
 # 🌍 International matches
 INTERNATIONAL_COMPETITIONS = [1, 4, 6]
+
+print(API_KEY)
