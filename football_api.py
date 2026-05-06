@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+
 
 import requests
 import aiohttp
@@ -26,15 +27,19 @@ def get_current_season():
 # CORE HTTP FUNCTIONS
 # =========================
 def api_get(endpoint, params=None):
+
     url = f"{BASE_URL}{endpoint.lstrip('/')}"
-    headers = HEADERS
-    clear_expired_cache()
 
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            params=params,
+            timeout=30
+        )
 
         if response.status_code == 429:
-            print("⚠️ Rate limit hit. Waiting...")
+            print("⚠️ Rate limit hit.")
             time.sleep(60)
             return api_get(endpoint, params)
 
@@ -60,9 +65,8 @@ async def async_api_get(endpoint, params=None, retries=3):
             return data
 
     url = f"{BASE_URL}{endpoint.lstrip('/')}"
-    headers = HEADERS
 
-    async with aiohttp.ClientSession(headers=headers) as session:
+    async with aiohttp.ClientSession(headers=HEADERS) as session:
         for _ in range(retries):
             try:
                 async with session.get(url, params=params, timeout=20) as response:
@@ -99,27 +103,26 @@ def score_match(query, team_name):
 
 TEAM_CACHE = []
 ALIASES = {
-    "atletico": "Atletico Madrid",
-    "atleti": "Atletico Madrid",
     "man utd": "Manchester United",
     "utd": "Manchester United",
     "man united": "Manchester United",
     "man city": "Manchester City",
     "city": "Manchester City",
-    "psg": "Paris Saint Germain",
+    "paris sg": "Paris Saint-Germain",
     "barca": "Barcelona",
-    "bayern": "Bayern Munich",
     "inter": "Inter",
     "milan": "AC Milan",
     "juve": "Juventus",
     "dortmund": "Borussia Dortmund",
     "spurs": "Tottenham",
-    "paris sg": "Paris Saint Germain",
+    "psg": "Paris Saint-Germain",
     "ath madrid": "Atletico Madrid",
     "atm": "Atletico Madrid",
     "newcastle utd": "Newcastle",
     "sporting": "Sporting CP",
     "benfica": "Benfica",
+    "atletico madrid": "Club Atlético de Madrid",
+    "bayern munich": "FC Bayern München",
 }
 
 def load_all_teams():
@@ -132,22 +135,18 @@ def load_all_teams():
 
     all_teams = []
     seen_ids = set()
+    league_ids = list(set(CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS))
 
-    for league_id in CLUB_COMPETITIONS + INTERNATIONAL_COMPETITIONS:
+    for league_id in league_ids:
         data = api_get(
-            "teams",
-            {
-                "league": league_id,
-                "season": get_current_season()
-            }
+            f"competitions/{league_id}/teams"
         )
 
-        if not data or "response" not in data:
+        if not data or "teams" not in data:
             print(f"❌ Failed loading league {league_id}")
             continue
 
-        for item in data["response"]:
-            team = item.get("team", {})
+        for team in data["teams"]:
 
             team_id = team.get("id")
 
@@ -185,7 +184,7 @@ def find_team_by_name(name: str):
         elif name in team_name:
             score = 90
 
-        elif any(word in team_name for word in name.split()):
+        elif any(word == part for part in team_name.split() for word in name.split()):
             score = 75
 
         if team_name.startswith(name):
@@ -201,10 +200,10 @@ def find_team_by_name(name: str):
         return {
             "id": best_match.get("id"),
             "name": best_match.get("name"),
-            "shortName": best_match.get("name"),
-            "tla": best_match.get("code"),
-            "country": best_match.get("country", ""),
-            "crest": best_match.get("logo")
+            "shortName": best_match.get("shortName"),
+            "tla": best_match.get("tla"),
+            "country": best_match.get("area", {}).get("name", ""),
+            "crest": best_match.get("crest")
         }
 
     print("❌ No match found")
@@ -214,11 +213,7 @@ def find_team_by_name(name: str):
 # TEAM STATS ENGINE (🔥 CORE LOGIC)
 # =========================
 def compute_team_stats(matches, team_id=None):
-    """
-    Compute team statistics from matches.
-    If team_id provided, calculates from team perspective (home/away).
-    Otherwise calculates assuming first team in match is home team.
-    """
+
     if not matches:
         return None
 
@@ -231,30 +226,34 @@ def compute_team_stats(matches, team_id=None):
     clean_sheets = 0
     failed_to_score = 0
 
-    total = len(matches)
+    valid_matches = 0
 
     for m in matches:
+
         try:
             score = m.get("score", {}).get("fullTime", {})
-            home_goals = score.get("home") or 0
-            away_goals = score.get("away") or 0
-            
+
+            home_goals = score.get("home")
+            away_goals = score.get("away")
+
             if home_goals is None or away_goals is None:
                 continue
 
-            # If team_id provided, calculate from team perspective
+            valid_matches += 1
+
             if team_id:
+
                 home_id = m.get("homeTeam", {}).get("id")
                 away_id = m.get("awayTeam", {}).get("id")
-                
+
                 if team_id == home_id:
                     scored = home_goals
                     conceded = away_goals
                 else:
                     scored = away_goals
                     conceded = home_goals
+
             else:
-                # Default: treat as home team
                 scored = home_goals
                 conceded = away_goals
 
@@ -264,27 +263,34 @@ def compute_team_stats(matches, team_id=None):
             if scored > conceded:
                 form_points += 3
                 wins += 1
+
             elif scored == conceded:
                 form_points += 1
                 draws += 1
+
             else:
                 losses += 1
 
             if conceded == 0:
                 clean_sheets += 1
+
             if scored == 0:
                 failed_to_score += 1
+
         except Exception:
             continue
 
+    if valid_matches == 0:
+        return None
+
     return {
-        "form_points": form_points / total if total > 0 else 0,
-        "goals_scored_avg": goals_scored / total if total > 0 else 0,
-        "goals_conceded_avg": goals_conceded / total if total > 0 else 0,
-        "goal_diff_avg": (goals_scored - goals_conceded) / total if total > 0 else 0,
-        "win_rate": wins / total if total > 0 else 0,
-        "clean_sheet_rate": clean_sheets / total if total > 0 else 0,
-        "failed_to_score_rate": failed_to_score / total if total > 0 else 0,
+        "form_points": form_points / valid_matches,
+        "goals_scored_avg": goals_scored / valid_matches,
+        "goals_conceded_avg": goals_conceded / valid_matches,
+        "goal_diff_avg": (goals_scored - goals_conceded) / valid_matches,
+        "win_rate": wins / valid_matches,
+        "clean_sheet_rate": clean_sheets / valid_matches,
+        "failed_to_score_rate": failed_to_score / valid_matches,
         "wins": wins,
         "draws": draws,
         "losses": losses
@@ -296,32 +302,32 @@ def compute_team_stats(matches, team_id=None):
 # =========================
 async def async_collect_team_dataset(team_id: int, limit: int = 5):
     data = await async_api_get(
-        "fixtures",
+        f"teams/{team_id}/matches",
         {
-            "team": team_id,
-            "last": limit
+            "limit": limit
         }
     )
 
-    if not data or "response" not in data:
+    if not data or "matches" not in data:
         return None
 
     matches = []
+    matches_data = data["matches"][:limit]
 
-    for m in data["response"]:
+    for m in matches_data:
         matches.append({
             "homeTeam": {
-                "id": m["teams"]["home"]["id"],
-                "name": m["teams"]["home"]["name"]
+                "id": m["homeTeam"]["id"],
+                "name": m["homeTeam"]["name"]
             },
             "awayTeam": {
-                "id": m["teams"]["away"]["id"],
-                "name": m["teams"]["away"]["name"]
+                "id": m["awayTeam"]["id"],
+                "name": m["awayTeam"]["name"]
             },
             "score": {
                 "fullTime": {
-                    "home": m["goals"]["home"],
-                    "away": m["goals"]["away"]
+                    "home": m["score"]["fullTime"]["home"],
+                    "away": m["score"]["fullTime"]["away"]
                 }
             }
         })
@@ -331,32 +337,32 @@ async def async_collect_team_dataset(team_id: int, limit: int = 5):
 
 def collect_team_dataset(team_id: int, limit: int = 5):
     data = api_get(
-        "fixtures",
+        f"teams/{team_id}/matches",
         {
-            "team": team_id,
-            "last": limit
+            "limit": limit
         }
     )
 
-    if not data or "response" not in data:
+    if not data or "matches" not in data:
         return None
 
     matches = []
+    matches_data = data["matches"][:limit]
 
-    for m in data["response"]:
+    for m in matches_data:
         matches.append({
             "homeTeam": {
-                "id": m["teams"]["home"]["id"],
-                "name": m["teams"]["home"]["name"]
+                "id": m["homeTeam"]["id"],
+                "name": m["homeTeam"]["name"]
             },
             "awayTeam": {
-                "id": m["teams"]["away"]["id"],
-                "name": m["teams"]["away"]["name"]
+                "id": m["awayTeam"]["id"],
+                "name": m["awayTeam"]["name"]
             },
             "score": {
                 "fullTime": {
-                    "home": m["goals"]["home"],
-                    "away": m["goals"]["away"]
+                    "home": m["score"]["fullTime"]["home"],
+                    "away": m["score"]["fullTime"]["away"]
                 }
             }
         })
@@ -365,32 +371,32 @@ def collect_team_dataset(team_id: int, limit: int = 5):
 
 async def get_last_matches(team_id, limit=5):
     data = await async_api_get(
-        "fixtures",
-        {
-            "team": team_id,
-            "last": limit
-        }
-    )
+            f"teams/{team_id}/matches",
+            {
+                "limit": limit
+            }
+        )
 
-    if not data or "response" not in data:
+    if not data or "matches" not in data:
         return []
 
     matches = []
+    matches_data = data["matches"][:limit]
 
-    for m in data["response"]:
+    for m in matches_data:
         matches.append({
             "homeTeam": {
-                "id": m["teams"]["home"]["id"],
-                "name": m["teams"]["home"]["name"]
+                "id": m["homeTeam"]["id"],
+                "name": m["homeTeam"]["name"]
             },
             "awayTeam": {
-                "id": m["teams"]["away"]["id"],
-                "name": m["teams"]["away"]["name"]
+                "id": m["awayTeam"]["id"],
+                "name": m["awayTeam"]["name"]
             },
             "score": {
                 "fullTime": {
-                    "home": m["goals"]["home"],
-                    "away": m["goals"]["away"]
+                    "home": m["score"]["fullTime"]["home"],
+                    "away": m["score"]["fullTime"]["away"]
                 }
             }
         })
@@ -421,40 +427,33 @@ def compute_match_intensity(matches):
 # =========================
 # SCHEDULED MATCHES
 # =========================
-async def async_get_scheduled_matches_from_competition(code=None, date_from=None, date_to=None):
-    params = {}
+async def async_get_scheduled_matches_from_competition(
+    code=None,
+    date_from=None,
+    date_to=None
+):
 
-    if code:
-        params["league"] = code
+    params = {
+        "status": "SCHEDULED"
+    }
 
     if date_from:
-        params["date"] = date_from
+        params["dateFrom"] = date_from
 
-    params["season"] = get_current_season()
-    params["timezone"] = "Asia/Bangkok"
+    if date_to:
+        params["dateTo"] = date_to
 
-    data = await async_api_get("fixtures", params)
+    endpoint = (
+        f"competitions/{code}/matches"
+        if code else "matches"
+    )
 
-    if not data or "response" not in data:
+    data = await async_api_get(endpoint, params)
+
+    if not data or "matches" not in data:
         return []
 
-    matches = []
-
-    for m in data["response"]:
-        matches.append({
-            "homeTeam": {
-                "name": m["teams"]["home"]["name"]
-            },
-            "awayTeam": {
-                "name": m["teams"]["away"]["name"]
-            },
-            "utcDate": m["fixture"]["date"],
-            "competition": {
-                "name": m["league"]["name"]
-            }
-        })
-
-    return matches
+    return data["matches"]
 
 
 # =========================
@@ -472,7 +471,7 @@ def normalize_team_object(team: dict):
         "name": team.get("name"),
         "shortName": team.get("shortName"),
         "tla": team.get("tla"),
-        "country": team.get("country", ""),
+        "country": team.get("area", {}).get("name", ""),
         "crest": team.get("crest")
     }
 
@@ -481,44 +480,6 @@ def find_club_team(name: str):
 
 def find_national_team(name: str):
     return find_team_by_name(name)
-
-async def async_find_match_in_competitions(home_name: str, away_name: str, date_from=None, date_to=None):
-
-    home_name_lower = home_name.lower()
-    away_name_lower = away_name.lower()
-
-    for league_id in COMPETITIONS.keys():
-
-        params = {
-            "league": league_id,
-            "season": get_current_season(),
-            "timezone": "Asia/Bangkok"
-        }
-
-        if date_from:
-            params["date"] = date_from
-
-        data = await async_api_get("fixtures", params)
-
-        if not data or "response" not in data:
-            continue
-
-        for m in data["response"]:
-
-            home = m["teams"]["home"]["name"].lower()
-            away = m["teams"]["away"]["name"].lower()
-
-            def match_name(a, b):
-                return a in b or b in a
-
-            if match_name(home_name_lower, home) and match_name(away_name_lower, away):
-                return (
-                    m,
-                    league_id,
-                    COMPETITIONS[league_id]
-                )
-
-    return None, None, None
 
 def clear_expired_cache():
     now = time.time()
@@ -531,3 +492,49 @@ def clear_expired_cache():
 
     for key in expired:
         del CACHE[key]
+
+async def async_find_match_in_competitions(
+    home_name,
+    away_name,
+    date_from=None,
+    date_to=None
+):
+
+    home_name = home_name.lower()
+    away_name = away_name.lower()
+
+    for league_id in COMPETITIONS.keys():
+
+        data = await async_api_get(
+            f"competitions/{league_id}/matches",
+            {
+                "dateFrom": date_from or datetime.now().strftime("%Y-%m-%d"),
+                "dateTo": date_to or (
+                    datetime.now() + timedelta(days=7)
+                ).strftime("%Y-%m-%d")
+            }
+        )
+
+        if not data or "matches" not in data:
+            continue
+
+        for m in data["matches"]:
+
+            home = m["homeTeam"]["name"].lower()
+            away = m["awayTeam"]["name"].lower()
+
+            if (
+                home_name in home
+                and away_name in away
+            ) or (
+                away_name in away
+                and home_name in home
+            ):
+
+                return (
+                    m,
+                    league_id,
+                    COMPETITIONS[league_id]
+                )
+
+    return None, None, None

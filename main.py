@@ -2,10 +2,7 @@ import pickle
 import pandas as pd
 import asyncio
 import json
-import sys
-from datetime import datetime
 from pathlib import Path
-import requests
 from telegram import LabeledPrice
 from telegram.ext import PreCheckoutQueryHandler
 from datetime import datetime, timedelta, UTC
@@ -19,8 +16,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-
-import hashlib
 
 from football_api import (
     api_get,
@@ -45,15 +40,6 @@ MODEL_FILE = "rf_model.pkl"
 OWNER_ID = 6225991784  # Replace with your Telegram user ID for admin access
 VIP_FILE = Path("vip_users.json")
 VIP_PRICE_STARS = 300
-
-MATCH_BUTTON_CACHE = {}
-
-
-def make_match_callback(match_text: str) -> str:
-    key = f"match:{hashlib.sha1(match_text.encode('utf-8')).hexdigest()[:16]}"
-    MATCH_BUTTON_CACHE[key] = match_text
-    return key
-
 
 def parse_match(text):
     for sep in [" vs ", " VS ", " Vs ", " v ", " - "]:
@@ -339,36 +325,28 @@ async def vip_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_matches_by_date(date):
 
     all_matches = []
-    seen_fixture_ids = set()
 
     for league_id in FAST_COMPETITIONS:
 
         data = await async_api_get(
-            "fixtures",
+            f"competitions/{league_id}/matches",
             {
-                "date": date,
-                "league": league_id,
-                "season": get_current_season(),
-                "timezone": "Asia/Bangkok"
+                "dateFrom": date,
+                "dateTo": date,
+                "status": "SCHEDULED"
             }
         )
 
-        if not data or not data.get("response"):
+        if not data or not data.get("matches"):
             continue
 
-        for m in data["response"]:
-
-            if m["fixture"]["id"] in seen_fixture_ids:
-                continue
-
-            seen_fixture_ids.add(m["fixture"]["id"])
+        for m in data["matches"]:
 
             all_matches.append({
-                "home": m["teams"]["home"]["name"],
-                "away": m["teams"]["away"]["name"],
-                "fixture_id": m["fixture"]["id"],
-                "league": m["league"]["name"],
-                "time": m["fixture"]["date"]
+                "home": m["homeTeam"]["name"],
+                "away": m["awayTeam"]["name"],
+                "league": m["competition"]["name"],
+                "time": m["utcDate"]
             })
 
     return all_matches
@@ -411,16 +389,24 @@ async def today_matches(update, context):
 
     today = datetime.now().strftime("%Y-%m-%d")
     matches = await get_matches_by_date(today)
-    matches.sort(key=lambda x: x["time"])
+    matches.sort(key=lambda x: x.get("time", ""))
     matches = matches[:40]
 
     keyboard = []
 
     for m in matches:
-        text = f"{m['home']} vs {m['away']} | {m['league']}"
-        callback = f"matchid:{m['fixture_id']}"
 
-        keyboard.append([InlineKeyboardButton(text, callback_data=callback)])
+        home = m["home"]
+        away = m["away"]
+
+        text = f"{home} vs {away}"
+
+        keyboard.append([
+            InlineKeyboardButton(
+                text,
+                callback_data=text
+            )
+        ])
 
     if not keyboard:
         await update.message.reply_text("📭 No matches today.")
@@ -438,16 +424,24 @@ async def tomorrow_matches(update, context):
 
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     matches = await get_matches_by_date(tomorrow)
-    matches.sort(key=lambda x: x["time"])
+    matches.sort(key=lambda x: x.get("time", ""))
     matches = matches[:40]
 
     keyboard = []
 
     for m in matches:
-        text = f"{m['home']} vs {m['away']} | {m['league']}"
-        callback = f"matchid:{m['fixture_id']}"
 
-        keyboard.append([InlineKeyboardButton(text, callback_data=callback)])
+        home = m["home"]
+        away = m["away"]
+
+        text = f"{home} vs {away}"
+
+        keyboard.append([
+            InlineKeyboardButton(
+                text,
+                callback_data=text
+            )
+        ])
 
     if not keyboard:
         await update.message.reply_text("📭 No matches tomorrow.")
@@ -459,111 +453,8 @@ async def tomorrow_matches(update, context):
     )
 
 def get_team_players(team_id):
-    try:
-        data = api_get(
-            "players/squads",
-            {
-                "team": team_id
-            }
-        )
-
-        if not data or "response" not in data:
-            return []
-
-        response = data["response"]
-
-        if not response:
-            return []
-
-        return response[0].get("players", [])
-
-    except Exception as e:
-        print("Player fetch error:", e)
-        return []
+    return []
     
-async def process_match_by_id(message_obj, context, fixture_id, user_id):
-    if not await require_vip(message_obj, user_id):
-        return
-
-    await message_obj.reply_text("⏳ Analyzing match...")
-
-    # GET FIXTURE
-    data = await async_api_get("fixtures", {"id": fixture_id})
-
-    if not data or not data.get("response"):
-        await message_obj.reply_text("❌ Match not found.")
-        return
-
-    match = data["response"][0]
-
-    home_team = match["teams"]["home"]
-    away_team = match["teams"]["away"]
-
-    home_id = home_team["id"]
-    away_id = away_team["id"]
-
-    home_name = home_team["name"]
-    away_name = away_team["name"]
-
-    # LAST MATCHES
-    home_matches, away_matches = await asyncio.gather(
-        get_last_matches(home_id),
-        get_last_matches(away_id)
-    )
-
-    home_stats = compute_team_stats(home_matches, home_id)
-    away_stats = compute_team_stats(away_matches, away_id)
-
-    if not home_stats or not away_stats:
-        await message_obj.reply_text("❌ Not enough data.")
-        return
-
-    # SIMPLE WIN CALC
-    home_win = home_stats["win_rate"] * 100
-    away_win = away_stats["win_rate"] * 100
-    total = home_win + away_win
-
-    if total > 90:
-        scale = 90 / total
-        home_win *= scale
-        away_win *= scale
-
-    draw = 100 - (home_win + away_win)
-
-    # SCORE
-    home_goals = round(home_stats["goals_scored_avg"])
-    away_goals = round(away_stats["goals_scored_avg"])
-
-    # BETTING TIPS
-    tips = []
-
-    if home_win > 55:
-        tips.append(f"🔥 {home_name} likely to win")
-    elif away_win > 55:
-        tips.append(f"🔥 {away_name} likely to win")
-
-    if home_goals + away_goals > 2.5:
-        tips.append("⚽ OVER 2.5 goals")
-    else:
-        tips.append("🔒 UNDER 2.5 goals")
-
-    if abs(home_win - away_win) < 10:
-        tips.append("🎯 Close match – value bet")
-
-    msg = (
-        f"📊 {home_name} vs {away_name}\n\n"
-        f"🏠 {home_win:.1f}%\n"
-        f"🤝 {draw:.1f}%\n"
-        f"✈️ {away_win:.1f}%\n\n"
-        f"⚽ Score: {home_goals}-{away_goals}\n\n"
-    )
-
-    if tips:
-        msg += "💡 Tips:\n"
-        for t in tips:
-            msg += f"- {t}\n"
-
-    await message_obj.reply_text(msg)
 
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -595,15 +486,15 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "vip_monthly":
         await send_monthly_vip_invoice(query.message, context)
 
-    elif query.data.startswith("matchid:"):
-        _, fixture_id = query.data.split(":")
+    elif " vs " in query.data:
 
-        await process_match_by_id(
+        await process_match_request(
             query.message,
             context,
-            int(fixture_id),
+            query.data,
             update.effective_user.id
         )
+
 
 async def get_team_player_form(team_id):
     try:
@@ -849,8 +740,6 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         await message_obj.reply_text("Use format: Team A vs Team B")
         return
 
-    await message_obj.reply_text("⏳ Analyzing...")
-
     home_name = home_name.strip()
     away_name = away_name.strip()
 
@@ -879,11 +768,18 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         await message_obj.reply_text("❌ Could not find match data.")
         return
     
+    await message_obj.reply_text(
+        f"🔍 Found teams:\n"
+        f"🏠 Home: {home_team['name']} (ID: {home_team['id']})\n"
+        f"✈️ Away: {away_team['name']} (ID: {away_team['id']})\n\n"
+        "⏳ Analyzing..."
+    )
+    
     fixture_data = await async_find_match_in_competitions(
         home_team["name"],
         away_team["name"]
     )
-    if fixture_data[0]:
+    if fixture_data and fixture_data[0]:
         competition_info = f"\n🏆 {fixture_data[2]}"
 
     # 🔥 GET MATCH DATA
