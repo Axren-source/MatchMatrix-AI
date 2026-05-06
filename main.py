@@ -24,9 +24,10 @@ from football_api import (
     find_national_team,
     find_club_team,
     compute_team_stats,
-    get_current_season,
     get_last_matches,
     find_team_by_name,
+    get_standings,
+    calculate_motivation,
 )
 from analyzer import calculate_win_chances
 from config import API_KEY, BASE_URL, FAST_COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS, COMPETITIONS
@@ -527,7 +528,7 @@ def clamp_goals(value, min_goals=0, max_goals=4):
     return max(min_goals, min(max_goals, value))
 
 
-def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_win_prob, home_form_boost, away_form_boost, home_player_impact, away_player_impact):
+def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_win_prob, home_form_boost, away_form_boost, home_player_impact, away_player_impact, home_motivation, away_motivation):
     """
     Better score prediction using both:
     - model probabilities
@@ -562,6 +563,12 @@ def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_wi
 
     xg_home -= away_player_impact["defense"] * 0.2
     xg_away -= home_player_impact["defense"] * 0.2
+
+    xg_home += home_motivation["attack_boost"]
+    xg_away += away_motivation["attack_boost"]
+
+    xg_home -= away_motivation["defense_boost"]
+    xg_away -= home_motivation["defense_boost"]
 
     # Slight adjustment from match outcome probabilities
     prob_diff = home_win_prob - away_win_prob
@@ -750,6 +757,18 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     # If detect_match_mode failed, try searching across all competitions
     competition_info = ""
 
+    home_motivation = {
+        "attack_boost": 0,
+        "defense_boost": 0,
+        "text": ""
+    }
+
+    away_motivation = {
+        "attack_boost": 0,
+        "defense_boost": 0,
+        "text": ""
+    }
+
     # 🔥 ALWAYS fallback to API search
     if not home_team or not away_team:
         print("⚠️ Trying direct API team search...")
@@ -780,6 +799,24 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     )
     if fixture_data and fixture_data[0]:
         competition_info = f"\n🏆 {fixture_data[2]}"
+
+    if fixture_data and fixture_data[1]:
+
+        standings = await get_standings(
+        fixture_data[1]
+    )
+
+    if standings:
+
+        home_motivation = calculate_motivation(
+            standings,
+            home_team["name"]
+        )
+
+        away_motivation = calculate_motivation(
+            standings,
+            away_team["name"]
+        )
 
     # 🔥 GET MATCH DATA
     home_matches, away_matches = await asyncio.gather(
@@ -837,7 +874,9 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         home_form_boost,
         away_form_boost,
         home_player_impact,
-        away_player_impact
+        away_player_impact,
+        home_motivation,
+        away_motivation
     )
 
     # 🔥 RESULT
@@ -901,6 +940,14 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         msg += "💡 BETTING TIPS:\n"
         for i, tip in enumerate(tips[:5], 1):
             msg += f"{i}. {tip}\n"
+
+    msg += "\n🧠 MOTIVATION:\n"
+
+    if home_motivation["text"]:
+        msg += f"{home_team['name']}: {home_motivation['text']}\n"
+
+    if away_motivation["text"]:
+        msg += f"{away_team['name']}: {away_motivation['text']}\n"
     
     msg += f"\n📈 CONFIDENCE: {'High' if max(home_win, draw, away_win) > 45 else 'Medium' if max(home_win, draw, away_win) > 35 else 'Low'}"
 

@@ -89,6 +89,22 @@ async def async_api_get(endpoint, params=None, retries=3):
 
     return None
 
+async def get_standings(competition_code):
+
+    data = await async_api_get(
+        f"competitions/{competition_code}/standings"
+    )
+
+    if not data or "standings" not in data:
+        return None
+
+    for table in data["standings"]:
+
+        if table.get("type") == "TOTAL":
+            return table.get("table", [])
+
+    return None
+
 def score_match(query, team_name):
     query = query.lower()
     name = team_name.lower()
@@ -296,6 +312,63 @@ def compute_team_stats(matches, team_id=None):
         "losses": losses
     }
 
+def calculate_motivation(table, team_name):
+
+    if not table:
+        return {
+            "attack_boost": 0,
+            "defense_boost": 0,
+            "text": ""
+        }
+
+    for i, row in enumerate(table):
+
+        team = row["team"]["name"]
+
+        if team.lower() != team_name.lower():
+            continue
+
+        position = row["position"]
+        points = row["points"]
+
+        games_left = max(38 - row["playedGames"], 0)
+
+        attack_boost = 0
+        defense_boost = 0
+        text = ""
+
+        # TITLE RACE
+        if position <= 2 and games_left <= 8:
+            attack_boost += 0.25
+            text = "🔥 Fighting for the title"
+
+        # TOP 4 RACE
+        elif position <= 6:
+            attack_boost += 0.15
+            text = "🏆 Pushing for European qualification"
+
+        # RELEGATION
+        elif position >= 17:
+            attack_boost += 0.2
+            defense_boost += 0.1
+            text = "⚠️ Relegation battle pressure"
+
+        # SAFE MIDTABLE
+        else:
+            attack_boost -= 0.05
+            text = "😴 Relatively safe league position"
+
+        return {
+            "attack_boost": attack_boost,
+            "defense_boost": defense_boost,
+            "text": text
+        }
+
+    return {
+        "attack_boost": 0,
+        "defense_boost": 0,
+        "text": ""
+    }
 
 # =========================
 # DATA COLLECTION
