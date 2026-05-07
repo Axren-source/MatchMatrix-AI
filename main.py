@@ -800,7 +800,14 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
     if fixture_data and fixture_data[0]:
         competition_info = f"\n🏆 {fixture_data[2]}"
 
-    if fixture_data and fixture_data[1]:
+    standings = None
+    if fixture_data and fixture_data[1] in [
+        "PL",
+        "PD",
+        "BL1",
+        "SA",
+        "FL1"
+    ]:
 
         standings = await get_standings(
         fixture_data[1]
