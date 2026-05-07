@@ -29,7 +29,11 @@ CLUB_COMPETITIONS = [
     "BL1",
     "SA",
     "FL1",
-    "CL"
+    "CL",
+    "EL",
+    "ELC",
+    "PPL",
+    "DED",
 ]
 
 INTERNATIONAL_COMPETITIONS = [
