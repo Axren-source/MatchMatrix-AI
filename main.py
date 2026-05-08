@@ -550,6 +550,7 @@ def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_wi
     # Simple xG-style estimate
     xg_home = (home_attack * 0.65) + (away_defense * 0.35)
     xg_away = (away_attack * 0.65) + (home_defense * 0.35)
+    xg_home += 0.25  # Base boost to avoid too many 0-0 predictions
 
 # 🔥 PLAYER FORM IMPACT
     xg_home += home_form_boost["attack_boost"]
@@ -581,7 +582,7 @@ def predict_scorelines(home_stats, away_stats, home_win_prob, draw_prob, away_wi
         xg_away += 0.25
 
     # Strong draw chance = pull scores closer together
-    if draw_prob >= 32:
+    if draw_prob >= 40:
         avg_xg = (xg_home + xg_away) / 2
         xg_home = (xg_home * 0.7) + (avg_xg * 0.3)
         xg_away = (xg_away * 0.7) + (avg_xg * 0.3)
@@ -866,6 +867,15 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         away_win = probs[0] * 100
         draw = probs[1] * 100
         home_win = probs[2] * 100
+        # Reduce unrealistic draw inflation
+        draw *= 0.88
+
+        # Normalize back to 100%
+        total = home_win + draw + away_win
+
+        home_win = (home_win / total) * 100
+        draw = (draw / total) * 100
+        away_win = (away_win / total) * 100
     except Exception as e:
         print(f"⚠️ Model prediction failed: {e}. Using statistical analysis instead.")
         # Fallback to pure statistical analysis
