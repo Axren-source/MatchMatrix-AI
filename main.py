@@ -28,6 +28,8 @@ from football_api import (
     find_team_by_name,
     get_standings,
     calculate_motivation,
+    compute_recent_form,
+    compute_h2h_advantage,
 )
 from analyzer import calculate_win_chances
 from config import API_KEY, BASE_URL, FAST_COMPETITIONS, CLUB_COMPETITIONS, INTERNATIONAL_COMPETITIONS, COMPETITIONS
@@ -841,6 +843,15 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         await message_obj.reply_text("❌ Not enough data.")
         return
 
+    # ⚡ ADD RECENT FORM WEIGHTING (recent matches count more)
+    home_stats["recent_form"] = compute_recent_form(home_matches, home_team['id'])
+    away_stats["recent_form"] = compute_recent_form(away_matches, away_team['id'])
+
+    # ⚡ ADD HEAD-TO-HEAD ADVANTAGE
+    h2h_advantage = await compute_h2h_advantage(home_team["id"], away_team["id"])
+    home_stats["h2h_advantage"] = h2h_advantage
+    away_stats["h2h_advantage"] = -h2h_advantage
+
     # 🔥 PLAYER IMPACT
     home_players = get_team_players(home_team["id"])
     away_players = get_team_players(away_team["id"])
@@ -867,9 +878,10 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         away_win = probs[0] * 100
         draw = probs[1] * 100
         home_win = probs[2] * 100
-        # Reduce unrealistic draw inflation
-        draw *= 0.88
-
+        
+        # ⚡ AGGRESSIVE DRAW REDUCTION (was 0.88, now 0.70)
+        draw *= 0.70
+        
         # Normalize back to 100%
         total = home_win + draw + away_win
 

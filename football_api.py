@@ -312,6 +312,95 @@ def compute_team_stats(matches, team_id=None):
         "losses": losses
     }
 
+# ⚡ NEW: RECENT FORM WITH WEIGHTING (Last 5 matches weighted more)
+def compute_recent_form(matches, team_id=None):
+    """Calculate weighted recent form (recent matches worth more)"""
+    if not matches or len(matches) == 0:
+        return 0
+    
+    recent_form_points = 0
+    total_weight = 0
+    
+    for i, m in enumerate(matches[:5]):  # Last 5 matches
+        try:
+            score = m.get("score", {}).get("fullTime", {})
+            home_goals = score.get("home")
+            away_goals = score.get("away")
+            
+            if home_goals is None or away_goals is None:
+                continue
+            
+            weight = 1 + (i / 5)  # Recent matches get higher weight
+            
+            if team_id:
+                home_id = m.get("homeTeam", {}).get("id")
+                away_id = m.get("awayTeam", {}).get("id")
+                
+                if team_id == home_id:
+                    scored = home_goals
+                    conceded = away_goals
+                else:
+                    scored = away_goals
+                    conceded = home_goals
+            else:
+                scored = home_goals
+                conceded = away_goals
+            
+            if scored > conceded:
+                recent_form_points += 3 * weight
+            elif scored == conceded:
+                recent_form_points += 1 * weight
+            
+            total_weight += weight
+        except Exception:
+            continue
+    
+    return recent_form_points / total_weight if total_weight > 0 else 0
+
+# ⚡ NEW: HEAD-TO-HEAD ADVANTAGE
+async def compute_h2h_advantage(home_id, away_id):
+    """Get head-to-head record between two teams"""
+    data = await async_api_get(f"teams/{home_id}/matches", {
+        "limit": 50,
+        "status": "FINISHED"
+    })
+    
+    if not data or "matches" not in data:
+        return 0
+    
+    h2h_wins = 0
+    h2h_draws = 0
+    h2h_losses = 0
+    
+    for m in data["matches"]:
+        opponent_id = None
+        
+        if m.get("homeTeam", {}).get("id") == home_id:
+            opponent_id = m.get("awayTeam", {}).get("id")
+            scored = m.get("score", {}).get("fullTime", {}).get("home")
+            conceded = m.get("score", {}).get("fullTime", {}).get("away")
+        else:
+            opponent_id = m.get("homeTeam", {}).get("id")
+            scored = m.get("score", {}).get("fullTime", {}).get("away")
+            conceded = m.get("score", {}).get("fullTime", {}).get("home")
+        
+        if opponent_id != away_id or scored is None:
+            continue
+        
+        if scored > conceded:
+            h2h_wins += 1
+        elif scored == conceded:
+            h2h_draws += 1
+        else:
+            h2h_losses += 1
+    
+    total = h2h_wins + h2h_draws + h2h_losses
+    if total == 0:
+        return 0
+    
+    # Return advantage score
+    return (h2h_wins * 3 + h2h_draws) / total - 1.5
+
 def calculate_motivation(table, team_name):
 
     if not table:
