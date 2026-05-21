@@ -879,8 +879,8 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         draw = probs[1] * 100
         home_win = probs[2] * 100
         
-        # ⚡ AGGRESSIVE DRAW REDUCTION (was 0.88, now 0.70)
-        draw *= 0.70
+        # ⚡⚡⚡ EXTREME DRAW SUPPRESSION (0.70 → 0.40)
+        draw *= 0.40
         
         # Normalize back to 100%
         total = home_win + draw + away_win
@@ -888,12 +888,31 @@ async def process_match_request(message_obj, context, user_input: str, user_id: 
         home_win = (home_win / total) * 100
         draw = (draw / total) * 100
         away_win = (away_win / total) * 100
+        
+        # ⚡ SECOND PASS: Cap draws at 25% maximum
+        if draw > 25:
+            excess = draw - 25
+            draw = 25
+            home_win += excess * 0.5
+            away_win += excess * 0.5
     except Exception as e:
         print(f"⚠️ Model prediction failed: {e}. Using statistical analysis instead.")
         # Fallback to pure statistical analysis
         home_win, draw, away_win = calculate_win_chances(home_stats, away_stats)
+        
+        # ⚡ Even suppress draws in fallback
+        draw *= 0.70
+        total = home_win + draw + away_win
+        home_win = (home_win / total) * 100
+        draw = (draw / total) * 100
+        away_win = (away_win / total) * 100
 
-    # 🔥 SCORE PREDICTION
+    # ⚡ FINAL HARD CAP: No prediction should exceed 20% draw
+    if draw > 20:
+        excess = draw - 20
+        draw = 20
+        home_win += excess * 0.5
+        away_win += excess * 0.5
     main_score, alt_scores, xg_home, xg_away = predict_scorelines(
         home_stats,
         away_stats,

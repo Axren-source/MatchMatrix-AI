@@ -1,8 +1,8 @@
 def calculate_win_chances(home_stats, away_stats):
-    # ⚡ NO DRAW BIAS - Start neutral
-    home_chance = 35.0
-    draw_chance = 30.0
-    away_chance = 35.0
+    # ⚡ NO DRAW BIAS - Draws heavily suppressed
+    home_chance = 40.0
+    draw_chance = 20.0  # Reduced from 30% to 20%
+    away_chance = 40.0
 
     # Form points (recent performance)
     form_diff = home_stats["form_points"] - away_stats["form_points"]
@@ -34,22 +34,22 @@ def calculate_win_chances(home_stats, away_stats):
     # Win rate emphasis
     home_chance += (home_stats["win_rate"] - away_stats["win_rate"]) * 20.0
 
-    # Draw only if truly close match
+    # Draw only if EXTREMELY close match
     closeness = abs(form_diff) + abs(goal_diff) + abs(defense_diff)
     
-    if closeness < 1.5:
-        draw_chance += 8
-        home_chance -= 4
-        away_chance -= 4
-    elif closeness < 3:
+    if closeness < 0.5:  # Almost never
         draw_chance += 3
         home_chance -= 1.5
         away_chance -= 1.5
+    elif closeness < 1.0:
+        draw_chance += 1
+        home_chance -= 0.5
+        away_chance -= 0.5
 
-    # Ensure minimum probability
-    home_chance = max(home_chance, 10)
-    draw_chance = max(draw_chance, 5)
-    away_chance = max(away_chance, 10)
+    # Ensure minimum probability (draws capped very low)
+    home_chance = max(home_chance, 15)
+    draw_chance = max(draw_chance, 2)  # Only 2% minimum for draws
+    away_chance = max(away_chance, 15)
 
     # Normalize to 100%
     total = home_chance + draw_chance + away_chance
