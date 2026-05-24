@@ -228,7 +228,69 @@ def find_team_by_name(name: str):
 # =========================
 # TEAM STATS ENGINE (🔥 CORE LOGIC)
 # =========================
-def compute_team_stats(matches, team_id=None):
+RECENT_MATCH_WEIGHTS = [1.5, 1.3, 1.15, 1.0, 0.85]
+
+
+def _recency_weight(index):
+    if index < len(RECENT_MATCH_WEIGHTS):
+        return RECENT_MATCH_WEIGHTS[index]
+    return RECENT_MATCH_WEIGHTS[-1]
+
+
+def _team_match_context(match, team_id=None):
+    score = match.get("score", {}).get("fullTime", {})
+    home_goals = score.get("home")
+    away_goals = score.get("away")
+
+    if home_goals is None or away_goals is None:
+        return None
+
+    home_id = match.get("homeTeam", {}).get("id")
+    away_id = match.get("awayTeam", {}).get("id")
+
+    if team_id and team_id not in (home_id, away_id):
+        return None
+
+    if team_id and team_id == away_id:
+        return {
+            "scored": away_goals,
+            "conceded": home_goals,
+            "venue": "away",
+            "total_goals": home_goals + away_goals,
+        }
+
+    return {
+        "scored": home_goals,
+        "conceded": away_goals,
+        "venue": "home",
+        "total_goals": home_goals + away_goals,
+    }
+
+
+def _at_least_rate(values, threshold):
+    if not values:
+        return 0
+    consistent = sum(1 for value in values if value >= threshold)
+    return consistent / len(values)
+
+
+def _at_most_rate(values, threshold):
+    if not values:
+        return 0
+    consistent = sum(1 for value in values if value <= threshold)
+    return consistent / len(values)
+
+
+def _goal_volatility(goal_diffs):
+    if len(goal_diffs) < 2:
+        return 0
+
+    avg_diff = sum(goal_diffs) / len(goal_diffs)
+    variance = sum((diff - avg_diff) ** 2 for diff in goal_diffs) / len(goal_diffs)
+    return variance ** 0.5
+
+
+def compute_team_stats(matches, team_id=None, venue=None):
 
     if not matches:
         return None
@@ -243,49 +305,51 @@ def compute_team_stats(matches, team_id=None):
     failed_to_score = 0
 
     valid_matches = 0
+    total_weight = 0
+    recent_results = []
+    scored_values = []
+    conceded_values = []
+    goal_diffs = []
+    total_goals_values = []
 
     for m in matches:
 
         try:
-            score = m.get("score", {}).get("fullTime", {})
-
-            home_goals = score.get("home")
-            away_goals = score.get("away")
-
-            if home_goals is None or away_goals is None:
+            context = _team_match_context(m, team_id)
+            if not context:
                 continue
 
+            if venue and context["venue"] != venue:
+                continue
+
+            weight = _recency_weight(valid_matches)
             valid_matches += 1
+            total_weight += weight
 
-            if team_id:
+            scored = context["scored"]
+            conceded = context["conceded"]
+            total_goals = context["total_goals"]
 
-                home_id = m.get("homeTeam", {}).get("id")
-                away_id = m.get("awayTeam", {}).get("id")
-
-                if team_id == home_id:
-                    scored = home_goals
-                    conceded = away_goals
-                else:
-                    scored = away_goals
-                    conceded = home_goals
-
-            else:
-                scored = home_goals
-                conceded = away_goals
-
-            goals_scored += scored
-            goals_conceded += conceded
+            goals_scored += scored * weight
+            goals_conceded += conceded * weight
+            scored_values.append(scored)
+            conceded_values.append(conceded)
+            goal_diffs.append(scored - conceded)
+            total_goals_values.append(total_goals)
 
             if scored > conceded:
-                form_points += 3
+                form_points += 3 * weight
                 wins += 1
+                recent_results.append(1)
 
             elif scored == conceded:
-                form_points += 1
+                form_points += 1 * weight
                 draws += 1
+                recent_results.append(0)
 
             else:
                 losses += 1
+                recent_results.append(-1)
 
             if conceded == 0:
                 clean_sheets += 1
@@ -299,18 +363,60 @@ def compute_team_stats(matches, team_id=None):
     if valid_matches == 0:
         return None
 
-    return {
-        "form_points": form_points / valid_matches,
-        "goals_scored_avg": goals_scored / valid_matches,
-        "goals_conceded_avg": goals_conceded / valid_matches,
-        "goal_diff_avg": (goals_scored - goals_conceded) / valid_matches,
+    goals_scored_avg = goals_scored / total_weight
+    goals_conceded_avg = goals_conceded / total_weight
+    goal_diff_avg = goals_scored_avg - goals_conceded_avg
+    form_avg = form_points / total_weight
+    scoring_consistency = _at_least_rate(scored_values, 1)
+    defensive_consistency = _at_most_rate(conceded_values, 1)
+    volatility = _goal_volatility(goal_diffs)
+    momentum = 0
+
+    for index, result in enumerate(recent_results[:3]):
+        momentum += result * (3 - index)
+
+    momentum = momentum / 6
+    avg_total_goals = sum(total_goals_values) / len(total_goals_values)
+
+    stats = {
+        "form_points": form_avg,
+        "weighted_form": form_avg,
+        "goals_scored_avg": goals_scored_avg,
+        "goals_conceded_avg": goals_conceded_avg,
+        "goal_diff_avg": goal_diff_avg,
         "win_rate": wins / valid_matches,
         "clean_sheet_rate": clean_sheets / valid_matches,
         "failed_to_score_rate": failed_to_score / valid_matches,
+        "momentum": momentum,
+        "scoring_consistency": scoring_consistency,
+        "defensive_consistency": defensive_consistency,
+        "goal_volatility": volatility,
+        "avg_total_goals": avg_total_goals,
+        "matches_count": valid_matches,
         "wins": wins,
         "draws": draws,
         "losses": losses
     }
+
+    if venue == "home":
+        stats["home_advantage_rating"] = (
+            stats["win_rate"] * 0.45 +
+            max(goal_diff_avg, -1.5) * 0.25 +
+            scoring_consistency * 0.20 +
+            defensive_consistency * 0.10
+        )
+        stats["home_efficiency"] = goals_scored_avg / max(goals_conceded_avg, 0.35)
+
+    if venue == "away":
+        stats["away_weakness_rating"] = (
+            stats["losses"] / valid_matches * 0.45 +
+            max(goals_conceded_avg - goals_scored_avg, -1.5) * 0.25 +
+            stats["failed_to_score_rate"] * 0.20 +
+            (1 - defensive_consistency) * 0.10
+        )
+        stats["away_efficiency"] = goals_scored_avg / max(goals_conceded_avg, 0.35)
+
+    return stats
 
 # ⚡ NEW: RECENT FORM WITH WEIGHTING (Last 5 matches weighted more)
 def compute_recent_form(matches, team_id=None):
@@ -321,30 +427,18 @@ def compute_recent_form(matches, team_id=None):
     recent_form_points = 0
     total_weight = 0
     
-    for i, m in enumerate(matches[:5]):  # Last 5 matches
+    valid_index = 0
+
+    for m in matches[:5]:  # Last 5 matches, newest first from the API
         try:
-            score = m.get("score", {}).get("fullTime", {})
-            home_goals = score.get("home")
-            away_goals = score.get("away")
-            
-            if home_goals is None or away_goals is None:
+            context = _team_match_context(m, team_id)
+            if not context:
                 continue
             
-            weight = 1 + (i / 5)  # Recent matches get higher weight
-            
-            if team_id:
-                home_id = m.get("homeTeam", {}).get("id")
-                away_id = m.get("awayTeam", {}).get("id")
-                
-                if team_id == home_id:
-                    scored = home_goals
-                    conceded = away_goals
-                else:
-                    scored = away_goals
-                    conceded = home_goals
-            else:
-                scored = home_goals
-                conceded = away_goals
+            weight = _recency_weight(valid_index)
+            valid_index += 1
+            scored = context["scored"]
+            conceded = context["conceded"]
             
             if scored > conceded:
                 recent_form_points += 3 * weight
